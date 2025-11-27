@@ -7,4 +7,3 @@ duckduckgo-search
 openpyxl
 xlsxwriter
 scipy
-feedparser
