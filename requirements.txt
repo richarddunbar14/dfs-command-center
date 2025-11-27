@@ -7,3 +7,4 @@ feedparser
 nfl_data_py
 requests
 pybaseball
+duckduckgo-search
