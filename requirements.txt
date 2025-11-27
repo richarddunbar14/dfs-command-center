@@ -4,5 +4,3 @@ numpy
 pulp
 plotly
 duckduckgo_search
-feedparser
-scipy
