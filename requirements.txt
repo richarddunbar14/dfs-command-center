@@ -3,4 +3,8 @@ pandas
 numpy
 pulp
 plotly
-duckduckgo_search
+duckduckgo-search
+openpyxl
+xlsxwriter
+scipy
+feedparser
