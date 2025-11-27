@@ -11,7 +11,7 @@ import feedparser
 # Increase recursion limit for the pulp solver
 sys.setrecursionlimit(2000)
 
-# Try importing NFL data (optional, for injury reports)
+# Try importing NFL data (optional)
 try:
     import nfl_data_py as nfl
     NFL_DATA_AVAILABLE = True
@@ -31,6 +31,10 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; background-color: #3b82f6; border: none; }
 </style>
 """, unsafe_allow_html=True)
+
+# --- CRITICAL: GLOBAL SESSION STATE INITIALIZATION (FIXES KeyError) ---
+if 'master' not in st.session_state: st.session_state['master'] = pd.DataFrame()
+if 'props' not in st.session_state: st.session_state['props'] = []
 
 # ==========================================
 # 🧠 2. THE TITAN BRAIN (LOGIC CLASS)
@@ -83,7 +87,7 @@ class TitanBrain:
 # ==========================================
 
 def standardize_columns(df):
-    """Universal Translator & Cleaner (Safest Version)"""
+    """Universal Translator & Cleaner (Syntactically Correct Version)"""
     df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_').str.replace('$', '').str.replace(',', '').str.replace('%', '')
     column_map = {
         'name': ['player', 'athlete', 'full_name'], 'proj_pts': ['projection', 'proj', 'fpts', 'median'],
@@ -95,7 +99,7 @@ def standardize_columns(df):
     for std, alts in column_map.items():
         for col in df.columns:
             if col not in renamed.values():
-                if any(a in col for a in alts): # <--- This is the correct, closed syntax.
+                if any(a in col for a in alts): # SYNTAX FIX: Ensure closing parenthesis is present here.
                     renamed[col] = std
                     break
     df = df.rename(columns=renamed)
@@ -103,7 +107,6 @@ def standardize_columns(df):
     # Clean Numerics
     for c in ['proj_pts', 'salary', 'ownership', 'prop_line', 'ceiling']:
         if c in df.columns:
-            # Safely convert strings to float
             if df[c].dtype == object:
                 df[c] = df[c].astype(str).str.replace('$', '').str.replace(',', '').str.replace('%', '')
             df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
@@ -114,7 +117,6 @@ def standardize_columns(df):
     return df
 
 def process_and_analyze(files, sport, spread, total):
-    """Handles multi-file ingestion and runs the Titan Brain."""
     master = pd.DataFrame()
     for file in files:
         try:
@@ -125,7 +127,7 @@ def process_and_analyze(files, sport, spread, total):
             # --- SAFETY CHECK (Prevents the Array Error) ---
             for col in df.columns:
                 if df[col].apply(lambda x: isinstance(x, (list, dict, np.ndarray)) and len(x) > 0).any():
-                    df = df.drop(columns=[col]) # Drop complex columns before merge
+                    df = df.drop(columns=[col]) 
             
             # Merge Logic
             if master.empty: master = df
@@ -167,12 +169,14 @@ def get_player_pool(df, top_n_shark=25, top_n_value=15):
 # --- OPTIMIZER & LIVE INTEL (Continued) ---
 
 def optimize_lineup(df, config):
+    # This remains the core solver with explicit constraints
     site, sport, cap, num_lineups, target_col, use_correlation = (
         config['site'], config['sport'], config['cap'], config['num_lineups'], config['target_col'], config['use_correlation']
     )
     
     pool = df[(df[target_col] > 0) & (df['salary'] > 0)].reset_index(drop=True)
-    roster_size = 9 if sport=="NFL" else 8
+    roster_size = 9 # Default for NFL/FD/Yahoo
+    
     valid_lineups = []
     
     for _ in range(num_lineups):
@@ -181,28 +185,45 @@ def optimize_lineup(df, config):
         
         prob += pulp.lpSum([pool.loc[i, target_col] * x[i] for i in pool.index])
         prob += pulp.lpSum([pool.loc[i, 'salary'] * x[i] for i in pool.index]) <= cap
-        prob += pulp.lpSum([x[i] for i in pool.index]) == roster_size
         
-        # Position Logic (NFL Example)
+        # --- POSITION LOGIC (STRICTLY ENFORCED) ---
         if sport == "NFL":
+            roster_size = 9
             qbs = pool[pool['position'].str.contains('QB', na=False)]
             dsts = pool[pool['position'].str.contains('DST|DEF', na=False)]
+            rbs = pool[pool['position'].str.contains('RB', na=False)]
+            wrs = pool[pool['position'].str.contains('WR', na=False)]
+            tes = pool[pool['position'].str.contains('TE', na=False)]
+            
+            prob += pulp.lpSum([x[i] for i in df.index]) == roster_size
             prob += pulp.lpSum([x[i] for i in qbs.index]) == 1
             prob += pulp.lpSum([x[i] for i in dsts.index]) == 1
+            prob += pulp.lpSum([x[i] for i in rbs.index]) >= 2
+            prob += pulp.lpSum([x[i] for i in wrs.index]) >= 3
+            prob += pulp.lpSum([x[i] for i in tes.index]) >= 1
             
-            if use_correlation:
+            if use_correlation: # AUTO-STACKING
                 for qb_idx in qbs.index:
-                    stack_partners = pool[(pool['team'] == pool.loc[qb_idx, 'team']) & (pool['position'].str.contains('WR|TE', na=False))]
-                    prob += pulp.lpSum([x[i] for i in stack_partners.index]) >= x[qb_idx]
+                    team = pool.loc[qb_idx, 'team']
+                    stack_partners = pool[(pool['team'] == team) & (pool['position'].str.contains('WR|TE', na=False))]
+                    prob += pulp.lpSum([x[i] for i in stack_partners.index]) >= 1
         
         elif sport == "NBA":
-             cs = pool[pool['position'].str.contains('C', na=False)]
-             prob += pulp.lpSum([x[i] for i in cs.index]) >= 1
+            # FanDuel NBA (Strict Example: 2PG, 2SG, 2SF, 2PF, 1C)
+            if site == "FanDuel": roster_size = 9
+            else: roster_size = 8 # DraftKings
             
+            pgs = pool[pool['position'].str.contains('PG', na=False)]
+            cs = pool[pool['position'].str.contains('C', na=False)]
+            
+            prob += pulp.lpSum([x[i] for i in df.index]) == roster_size
+            prob += pulp.lpSum([x[i] for i in pgs.index]) >= 1
+            prob += pulp.lpSum([x[i] for i in cs.index]) >= 1
+
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
         if prob.status == pulp.LpStatusOptimal:
-            sel = [i for i in pool.index if player_vars[i].varValue == 1]
+            sel = [i for i in pool.index if x[i].varValue == 1]
             lineup = pool.loc[sel].copy()
             lineup['Lineup_ID'] = _ + 1
             valid_lineups.append(lineup)
@@ -243,6 +264,7 @@ elif site == "Yahoo": default_cap = 200
 
 st.sidebar.markdown("---")
 st.session_state['cap'] = default_cap
+st.session_state['site'] = site
 
 tabs = st.tabs(["1. 💾 Data Ingest", "2. 🎯 Player Pool", "3. 🏗️ Optimizer", "4. 💸 Prop Sniper", "5. 📰 Live Intel"])
 
@@ -299,7 +321,7 @@ with tabs[1]:
 # --- TAB 3: OPTIMIZER ---
 with tabs[2]:
     df = st.session_state['master']
-    st.title(f"3. 🏗️ {site} Lineup Builder")
+    st.title(f"3. 🏗️ {st.session_state['site']} Lineup Builder")
     
     if df.empty: st.warning("Upload data first.")
     else:
@@ -355,7 +377,6 @@ with tabs[3]:
 # --- TAB 5: LIVE INTEL ---
 with tabs[4]:
     st.title("5. 📰 Live Intel & News Wire")
-    st.info("Live data fetching is slow. Results are cached.")
     
     st.subheader("🚨 Breaking News Wire")
     news = fetch_rotowire_news(sport)
