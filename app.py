@@ -3,122 +3,132 @@ import pandas as pd
 import numpy as np
 import pulp
 import base64
-from duckduckgo_search import DDGS
 import math
 import feedparser
 
-# Try importing NFL data (optional)
-try:
-    import nfl_data_py as nfl
-    NFL_DATA_AVAILABLE = True
-except ImportError:
-    NFL_DATA_AVAILABLE = False
-
 # ==========================================
-# 1. TITAN CONFIG
+# STREAMLIT CONFIG
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN COMMAND: FINAL FUSION", page_icon="💥")
+st.set_page_config(layout="wide", page_title="Titan Command", page_icon="💥")
 
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #e2e8f0; }
-    div[data-testid="stMetricValue"] { color: #38bdf8; font-size: 24px; font-weight: 800; }
     .reasoning-text { font-size: 12px; color: #94a3b8; font-style: italic; border-left: 2px solid #3b82f6; padding-left: 8px; }
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; background-color: #3b82f6; border: none; }
 </style>
 """, unsafe_allow_html=True)
 
-# Session State
-if 'master' not in st.session_state:
-    st.session_state['master'] = pd.DataFrame()
+if "master" not in st.session_state:
+    st.session_state["master"] = pd.DataFrame()
 
 # ==========================================
-# 2. TITAN BRAIN
+# TITAN BRAIN
 # ==========================================
 class TitanBrain:
     def __init__(self, sport, spread=0, total=0):
         self.sport = sport
         self.spread = spread
         self.total = total
-        
+
     def evaluate_player(self, row):
         reasons = []
-        score = 50.0
-        
-        # Leverage
-        if 'rank_proj' in row and 'rank_own' in row:
-            if row['rank_proj'] > 0 and row['rank_own'] > 0:
-                diff = row['rank_own'] - row['rank_proj']
-                if diff > 15:
-                    score += 15
-                    reasons.append("💎 High Leverage")
-                elif diff < -10:
-                    score -= 10
-                    reasons.append("⚠️ Chalk Trap")
+        score = 50.0  # baseline
 
-        # Game Script
-        if self.sport == "NFL" and 'position' in row:
-            if abs(self.spread) > 7 and "WR" in str(row['position']):
+        # Leverage logic
+        if "rank_proj" in row and "rank_own" in row:
+            diff = row["rank_own"] - row["rank_proj"]
+            if diff > 15:
+                score += 15
+                reasons.append("💎 High Leverage Advantage")
+            elif diff < -10:
+                score -= 10
+                reasons.append("⚠️ Overowned Risk")
+
+        # Game script logic
+        if self.sport == "NFL":
+            if "WR" in str(row.get("position", "")) and abs(self.spread) > 7:
                 score += 7
-                reasons.append("📜 Blowout Script")
+                reasons.append("📜 Garbage Time Boost")
 
-        # Prop
-        if 'prop_line' in row and 'proj_pts' in row:
-            if row['prop_line'] > 0:
-                edge = ((row['proj_pts'] - row['prop_line']) / row['proj_pts']) * 100
+        # Prop logic
+        if "prop_line" in row and "proj_pts" in row:
+            if row["prop_line"] > 0:
+                edge = ((row["proj_pts"] - row["prop_line"]) / row["proj_pts"]) * 100
                 if edge > 15:
                     score += 15
-                    reasons.append(f"💰 Prop Smash ({edge:.1f}%)")
+                    reasons.append(f"💰 Prop Edge {edge:.1f}%")
 
         # Ceiling
-        if 'ceiling' in row and 'proj_pts' in row:
-            if row['ceiling'] > row['proj_pts'] * 1.5:
+        if "ceiling" in row and "proj_pts" in row:
+            if row["ceiling"] > row["proj_pts"] * 1.5:
                 score += 10
-                reasons.append("🔥 Massive Ceiling")
+                reasons.append("🔥 High Ceiling Indicator")
 
-        score = max(0, min(100, score))
-        verdict = " | ".join(reasons) if reasons else "Neutral"
-        return score, verdict
+        final_score = max(0, min(100, score))
+        verdict = " | ".join(reasons) if reasons else "Neutral Profile"
+        return final_score, verdict
+
 
 # ==========================================
-# 3. DATA CLEANING
+# CLEANING / FILE PROCESSING
 # ==========================================
 def standardize_columns(df):
-    df.columns = df.columns.str.lower().str.replace(" ", "_").str.replace("-", "_")
+    # 🔥 FIX: Ensure all column names are strings
+    df.columns = [str(c) for c in df.columns]
+
+    df.columns = (
+        df.columns
+        .str.lower()
+        .str.replace(" ", "_")
+        .str.replace("-", "_")
+        .str.replace("$", "")
+        .str.replace(",", "")
+        .str.replace("%", "")
+    )
 
     mapping = {
-        'name': ['player', 'athlete', 'full_name'],
-        'proj_pts': ['projection','proj','fpts','median'],
-        'ownership': ['own','projected_ownership'],
-        'salary': ['cost','sal','price'],
-        'prop_line': ['line','prop','ou','total','strike'],
-        'position': ['pos'],
-        'team': ['tm','squad'],
-        'ceiling': ['ceil','max_pts']
+        "name": ["player", "full_name", "athlete"],
+        "proj_pts": ["proj", "projection", "points", "median", "fpts"],
+        "ownership": ["own", "projected_ownership"],
+        "salary": ["salary", "sal", "cost", "price"],
+        "prop_line": ["line", "prop", "total", "strike"],
+        "position": ["pos", "roster_position"],
+        "team": ["tm", "team"],
+        "ceiling": ["ceil", "max_pts"],
     }
 
-    rename = {}
+    rename_dict = {}
     for std, alts in mapping.items():
         for col in df.columns:
             if any(a in col for a in alts):
-                rename[col] = std
+                rename_dict[col] = std
 
-    df = df.rename(columns=rename)
+    df = df.rename(columns=rename_dict)
 
-    # numeric cleaning
-    numeric_cols = ['proj_pts','ownership','salary','prop_line','ceiling']
+    # Numeric cleansing
+    numeric_cols = ["proj_pts", "ownership", "salary", "prop_line", "ceiling"]
     for col in numeric_cols:
         if col in df.columns:
             df[col] = (
-                df[col]
-                .astype(str)
-                .str.replace("$","")
-                .str.replace(",","")
-                .str.replace("%","")
+                df[col].astype(str)
+                .str.replace("$", "")
+                .str.replace(",", "")
+                .str.replace("%", "")
             )
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # Drop any columns full of dict/list/DataFrame objects
+    drop_cols = []
+    for c in df.columns:
+        if df[c].apply(lambda x: isinstance(x, (dict, list, pd.DataFrame, np.ndarray))).any():
+            drop_cols.append(c)
+
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
 
     return df
+
 
 def process_and_analyze(files, sport, spread, total):
     master = pd.DataFrame()
@@ -128,209 +138,195 @@ def process_and_analyze(files, sport, spread, total):
             df = pd.read_csv(file) if file.name.endswith(".csv") else pd.read_excel(file)
             df = standardize_columns(df)
 
-            # Remove list/dict garbage columns
-            bad_cols = [
-                c for c in df.columns
-                if df[c].apply(lambda x: isinstance(x, (list, dict, np.ndarray))).any()
-            ]
-            df = df.drop(columns=bad_cols)
-
             if master.empty:
                 master = df
             else:
-                if 'name' in df.columns and 'name' in master.columns:
+                if "name" in master.columns and "name" in df.columns:
                     master = master.merge(df, on="name", how="left")
 
         except Exception as e:
             st.error(f"File Load Error: {e}")
 
     # Titan scoring
-    if 'proj_pts' in master.columns and 'ownership' in master.columns:
-        master['rank_proj'] = master['proj_pts'].rank(ascending=False)
-        master['rank_own'] = master['ownership'].rank(ascending=False)
+    if "proj_pts" in master.columns and "ownership" in master.columns:
+        master["rank_proj"] = master["proj_pts"].rank(ascending=False)
+        master["rank_own"] = master["ownership"].rank(ascending=False)
 
         brain = TitanBrain(sport, spread, total)
         res = master.apply(lambda r: brain.evaluate_player(r), axis=1, result_type="expand")
-        master['shark_score'] = res[0]
-        master['reasoning'] = res[1]
+        master["shark_score"] = res[0]
+        master["reasoning"] = res[1]
 
     return master
 
+
 # ==========================================
-# 4. PLAYER POOL
+# PLAYER POOL
 # ==========================================
-def get_player_pool(df, top_n_shark=25, top_n_value=15):
-    if 'shark_score' not in df.columns:
-        df['shark_score'] = 50.0
+def get_player_pool(df, n_shark=25, n_value=15):
     if df.empty:
         return pd.DataFrame()
 
-    pool_shark = df.nlargest(top_n_shark, 'shark_score')
+    if "shark_score" not in df.columns:
+        df["shark_score"] = 50.0
 
-    if 'proj_pts' in df.columns and 'salary' in df.columns:
-        df['value'] = (df['proj_pts'] / df['salary']) * 1000
-        pool_value = df[df['salary'] <= 5000].nlargest(top_n_value, 'value')
+    top_shark = df.nlargest(n_shark, "shark_score")
+
+    if "proj_pts" in df.columns and "salary" in df.columns:
+        df["value"] = (df["proj_pts"] / df["salary"]) * 1000
+        top_value = df[df["salary"] <= 5000].nlargest(n_value, "value")
     else:
-        pool_value = pd.DataFrame()
+        top_value = pd.DataFrame()
 
-    final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset='name')
-    return final_pool.sort_values('shark_score', ascending=False)
+    pool = pd.concat([top_shark, top_value]).drop_duplicates(subset="name")
+    return pool.sort_values("shark_score", ascending=False)
+
 
 # ==========================================
-# 5. OPTIMIZER (FIXED STACKING LOGIC)
+# OPTIMIZER (FIXED CBC + STACKING)
 # ==========================================
 def optimize_lineup(df, config):
-
-    site, sport, cap, num_lineups, target_col, use_correlation = (
-        config['site'], config['sport'], config['cap'], config['num_lineups'],
-        config['target_col'], config['use_correlation']
+    site, sport, cap, n_lineups, target_col, use_corr = (
+        config["site"],
+        config["sport"],
+        config["cap"],
+        config["n"],
+        config["target_col"],
+        config["use_corr"],
     )
 
-    pool = df[df[target_col] > 0].copy().reset_index(drop=True)
+    df = df[df[target_col] > 0].reset_index(drop=True)
+
     roster_size = 9 if sport == "NFL" else 8
+    final = []
 
-    valid = []
-
-    for L in range(num_lineups):
-        prob = pulp.LpProblem("TitanOpt", pulp.LpMaximize)
-        x = pulp.LpVariable.dicts("P", pool.index, lowBound=0, upBound=1, cat='Binary')
+    for L in range(n_lineups):
+        prob = pulp.LpProblem("Titan", pulp.LpMaximize)
+        x = pulp.LpVariable.dicts("P", df.index, 0, 1, cat="Binary")
 
         # Objective
-        prob += pulp.lpSum(pool.loc[i, target_col] * x[i] for i in pool.index)
+        prob += pulp.lpSum(df.loc[i, target_col] * x[i] for i in df.index)
 
         # Salary
-        prob += pulp.lpSum(pool.loc[i, 'salary'] * x[i] for i in pool.index) <= cap
+        prob += pulp.lpSum(df.loc[i, "salary"] * x[i] for i in df.index) <= cap
 
-        # Roster size
-        prob += pulp.lpSum(x[i] for i in pool.index) == roster_size
+        # Roster count
+        prob += pulp.lpSum(x[i] for i in df.index) == roster_size
 
-        # NFL rules
         if sport == "NFL":
-            qbs = pool[pool['position'].str.contains("QB", na=False)]
-            dsts = pool[pool['position'].str.contains("DST|DEF", na=False)]
+            qbs = df[df["position"].str.contains("QB", na=False)]
+            dst = df[df["position"].str.contains("DST|DEF", na=False)]
 
             prob += pulp.lpSum(x[i] for i in qbs.index) == 1
-            prob += pulp.lpSum(x[i] for i in dsts.index) == 1
+            prob += pulp.lpSum(x[i] for i in dst.index) == 1
 
-            # Fixed stacking logic
-            if use_correlation:
-                for qb_i in qbs.index:
-                    same_team = pool[
-                        (pool['team'] == pool.loc[qb_i, 'team']) &
-                        (pool['position'].str.contains("WR|TE", na=False))
+            # Stacking
+            if use_corr:
+                for qb in qbs.index:
+                    same_team = df[
+                        (df["team"] == df.loc[qb, "team"]) &
+                        (df["position"].str.contains("WR|TE"))
                     ]
-                    prob += pulp.lpSum(x[i] for i in same_team.index) >= x[qb_i]
+                    prob += pulp.lpSum(x[i] for i in same_team.index) >= x[qb]
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
 
-        if prob.status != pulp.LpStatusOptimal:
+        if prob.status != 1:
             break
 
-        chosen = [i for i in pool.index if x[i].value() == 1]
+        lineup = df.loc[[i for i in df.index if x[i].value() == 1]].copy()
+        lineup["Lineup_ID"] = L + 1
+        final.append(lineup)
 
-        lineup = pool.loc[chosen].copy()
-        lineup['Lineup_ID'] = L + 1
-        valid.append(lineup)
+        # Prevent repetition
+        prob += pulp.lpSum(x[i] for i in lineup.index) <= roster_size - 1
 
-        # prevent duplicate lineups
-        prob += pulp.lpSum(x[i] for i in chosen) <= roster_size - 1
+    return pd.concat(final) if final else None
 
-    return pd.concat(valid) if valid else None
 
 # ==========================================
-# 6. UTILS
+# NEWS
 # ==========================================
-def fetch_rotowire_news(sport):
-    url = {
+def fetch_news(sport):
+    urls = {
         "NFL": "https://www.rotowire.com/rss/news.htm?sport=nfl",
-        "NBA": "https://www.rotowire.com/rss/news.htm?sport=nba"
-    }.get(sport, "https://www.rotowire.com/rss/news.htm?sport=nfl")
+        "NBA": "https://www.rotowire.com/rss/news.htm?sport=nba",
+    }
+    feed = feedparser.parse(urls.get(sport, urls["NFL"]))
+    return [{"title": e.title, "summary": e.summary} for e in feed.entries[:5]]
 
-    feed = feedparser.parse(url)
-    return [{"title": x.title, "summary": x.summary} for x in feed.entries[:5]]
 
+# ==========================================
+# CSV EXPORT
+# ==========================================
 def get_csv_download(df):
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a download="titan_lineups.csv" href="data:file/csv;base64,{b64}">📥 Download CSV</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="lineups.csv">📥 Download CSV</a>'
+
 
 # ==========================================
-# 7. STREAMLIT UI
+# STREAMLIT UI
 # ==========================================
-st.sidebar.title("🦁 TITAN APEX CORE")
+st.sidebar.title("Titan APEX")
 
-sport = st.sidebar.selectbox("Sport", ["NFL","NBA","MLB","NHL"])
-site = st.sidebar.selectbox("Sportsbook", ["DraftKings","FanDuel","Yahoo","PrizePicks","Underdog"])
+sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "NHL"])
+site = st.sidebar.selectbox("Site", ["DraftKings", "FanDuel", "Yahoo", "PrizePicks", "Underdog"])
 
-default_cap = 60000 if site == "FanDuel" else (200 if site=="Yahoo" else 50000)
-st.session_state['cap'] = default_cap
+cap = 60000 if site == "FanDuel" else (200 if site == "Yahoo" else 50000)
 
-tabs = st.tabs(["1. Data", "2. Player Pool", "3. Optimizer", "4. Props", "5. News"])
+tabs = st.tabs(["Data", "Pool", "Optimizer", "Props", "News"])
 
-# === TAB 1 ===
+# DATA TAB
 with tabs[0]:
     st.header("Upload Data")
-    files = st.file_uploader("Upload CSV/XLSX files", accept_multiple_files=True)
+    files = st.file_uploader("Upload CSV or Excel", accept_multiple_files=True)
 
     spread = st.number_input("Vegas Spread", -20.0, 20.0, 0.0)
     total = st.number_input("Vegas Total", 100, 260, 210)
 
     if st.button("Process"):
         df = process_and_analyze(files, sport, spread, total)
-        st.session_state['master'] = df
-        st.success("Processed Successfully!")
+        st.session_state["master"] = df
+        st.success("Data Loaded")
 
-# === TAB 2 ===
+# POOL TAB
 with tabs[1]:
-    df = st.session_state['master']
+    df = st.session_state["master"]
     if df.empty:
         st.warning("No data.")
     else:
         pool = get_player_pool(df)
         st.dataframe(pool)
 
-# === TAB 3 ===
+# OPTIMIZER TAB
 with tabs[2]:
-    df = st.session_state['master']
+    df = st.session_state["master"]
     if df.empty:
-        st.warning("Upload data.")
+        st.warning("No data.")
     else:
-        num = st.number_input("Lineups", 1, 150, 10)
-        cap = st.number_input("Cap", value=st.session_state['cap'])
-        target = st.selectbox("Target", ["shark_score", "proj_pts"])
-        corr = st.checkbox("Enable Stacking", True)
+        n = st.number_input("Lineups", 1, 150, 10)
+        target = st.selectbox("Target Metric", ["shark_score", "proj_pts"])
+        corr = st.checkbox("Enable Correlation", True)
 
         if st.button("Optimize"):
-            config = {
+            cfg = {
                 "site": site,
                 "sport": sport,
                 "cap": cap,
-                "num_lineups": num,
+                "n": n,
                 "target_col": target,
-                "use_correlation": corr
+                "use_corr": corr,
             }
-            pool = get_player_pool(df)
-            result = optimize_lineup(pool, config)
-            if result is None:
-                st.error("No valid lineup found.")
+            res = optimize_lineup(pool, cfg)
+            if res is None:
+                st.error("No lineups found.")
             else:
-                st.dataframe(result)
-                st.markdown(get_csv_download(result), unsafe_allow_html=True)
+                st.dataframe(res)
+                st.markdown(get_csv_download(res), unsafe_allow_html=True)
 
-# === TAB 4 ===
-with tabs[3]:
-    df = st.session_state['master']
-    if df.empty or 'prop_line' not in df.columns:
-        st.warning("No prop data.")
-    else:
-        df['edge'] = ((df['proj_pts'] - df['prop_line']) / df['prop_line']) * 100
-        df['pick'] = np.where(df['edge']>0,"OVER","UNDER")
-        st.dataframe(df[['name','prop_line','proj_pts','edge','pick']])
-
-# === TAB 5 ===
+# NEWS TAB
 with tabs[4]:
-    st.header("Live News")
-    if st.button("Refresh"):
-        st.cache_data.clear()
-    for item in fetch_rotowire_news(sport):
+    st.header("Latest News")
+    for item in fetch_news(sport):
         st.info(f"**{item['title']}**\n\n{item['summary']}")
