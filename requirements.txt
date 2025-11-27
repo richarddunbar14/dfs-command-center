@@ -2,9 +2,7 @@ streamlit
 pandas
 numpy
 pulp
-scikit-learn
-duckduckgo-search
-openpyxl
-requests
+plotly
+duckduckgo_search
 feedparser
-pip install plotly
+scipy
