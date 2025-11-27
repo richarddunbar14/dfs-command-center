@@ -153,16 +153,20 @@ def process_and_analyze(files, sport, spread, total):
 def get_player_pool(df, top_n_shark=25, top_n_value=15):
     """Generates the final player pool based on multiple criteria."""
     
-    # --- CRITICAL FIX FOR KEYERROR ---
+    # --- CRITICAL FIX: Ensure Required Columns Exist ---
     if 'shark_score' not in df.columns: df['shark_score'] = 50.0 
     if 'reasoning' not in df.columns: df['reasoning'] = "N/A - Run Titan Brain First"
-    # --- END FIX ---
 
     if df.empty: return pd.DataFrame()
 
-    # FIX: Reset index on subsets before concat (Prevents InvalidIndexError)
+    # --- CRITICAL FIX: Remove Duplicate Columns to Prevent InvalidIndexError ---
+    # This keeps the first occurrence of a column name and drops duplicates
+    df = df.loc[:, ~df.columns.duplicated()]
+
+    # Create Shark Pool (Highest Score)
     pool_shark = df.nlargest(top_n_shark, 'shark_score').reset_index(drop=True)
     
+    # Create Value Pool (Best Projection per Dollar)
     if 'salary' in df.columns and 'proj_pts' in df.columns:
         df['value'] = (df['proj_pts'] / df['salary']) * 1000
         low_sal_thresh = 5000 
@@ -170,8 +174,9 @@ def get_player_pool(df, top_n_shark=25, top_n_value=15):
     else:
         pool_value = pd.DataFrame()
 
-    # Concatenate the pools (the originally failing line is now safe)
+    # Concatenate the pools safely
     final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset=['name']).reset_index(drop=True)
+    
     return final_pool.sort_values(by='shark_score', ascending=False)
 
 # --- OPTIMIZER & LIVE INTEL (Continued) ---
