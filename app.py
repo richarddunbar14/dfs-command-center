@@ -9,9 +9,9 @@ import base64
 from duckduckgo_search import DDGS
 
 # ==========================================
-# ⚙️ 1. SYSTEM CONFIGURATION & STYLING
+# ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: DEFINITIVE", page_icon="⚡")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: ROTOWIRE EDITION", page_icon="⚡")
 
 st.markdown("""
 <style>
@@ -100,75 +100,98 @@ class TitanBrain:
         return txt
 
 # ==========================================
-# 📂 3. DATA REFINERY (INGEST & CLEAN)
+# 📂 3. DATA REFINERY (CUSTOMIZED FOR YOUR SCREENSHOTS)
 # ==========================================
 
 class DataRefinery:
     @staticmethod
     def clean_currency(val):
-        try: return float(re.sub(r'[^\d.]', '', str(val)))
-        except: return 0
+        """Converts strings like '$5,000' or '5500' or '-' to float."""
+        try:
+            s_val = str(val).strip()
+            if s_val == '-' or s_val == '': return 0.0
+            clean = re.sub(r'[^\d.]', '', s_val)
+            return float(clean) if clean else 0.0
+        except: return 0.0
 
     @staticmethod
     def detect_and_clean(df):
-        """Auto-classifies files as DFS Slate, Projections, or Props."""
-        cols = [c.lower() for c in df.columns]
-        df.columns = df.columns.str.lower().str.strip()
+        """
+        Specific Logic for the CSVs shown in screenshots.
+        Maps 'SAL' -> salary, 'FPTS' -> projection.
+        """
+        # 1. Normalize Headers (Uppercase, Strip)
+        df.columns = df.columns.astype(str).str.upper().str.strip()
+        
         standardized = pd.DataFrame()
         
-        # 1. NAME
-        for c in ['player', 'name', 'athlete', 'player name', 'nickname']:
-            if c in df.columns:
-                # Clean DK Names "Name (ID)"
-                standardized['name'] = df[c].astype(str).apply(lambda x: x.split('(')[0].strip())
-                break
+        # --- MAPPING ENGINE ---
         
-        # 2. PROJECTIONS
-        for c in ['fpts', 'proj', 'projection', 'avg', 'points', 'fppg']:
-            if c in df.columns:
-                standardized['projection'] = df[c].apply(DataRefinery.clean_currency)
-                break
-        if 'projection' not in standardized.columns: standardized['projection'] = 0.0
+        # 1. NAME (PLAYER)
+        if 'PLAYER' in df.columns: 
+            # Clean "Name (ID)" format if present, otherwise just Name
+            standardized['name'] = df['PLAYER'].astype(str).apply(lambda x: x.split('(')[0].strip())
+        elif 'NAME' in df.columns:
+            standardized['name'] = df['NAME'].astype(str)
+            
+        # 2. PROJECTION (FPTS)
+        # Priorities: FPTS > AVG FPTS > PROJ > PTS
+        if 'FPTS' in df.columns: standardized['projection'] = df['FPTS'].apply(DataRefinery.clean_currency)
+        elif 'AVG FPTS' in df.columns: standardized['projection'] = df['AVG FPTS'].apply(DataRefinery.clean_currency)
+        elif 'PROJ' in df.columns: standardized['projection'] = df['PROJ'].apply(DataRefinery.clean_currency)
+        else: standardized['projection'] = 0.0
 
-        # 3. SALARY (DFS Trigger)
-        is_dfs = False
-        for c in ['salary', 'cost', 'price']:
-            if c in df.columns:
-                standardized['salary'] = df[c].apply(DataRefinery.clean_currency)
-                is_dfs = True
-                break
+        # 3. SALARY (SAL)
+        # Priorities: SAL > SALARY > COST
+        if 'SAL' in df.columns: standardized['salary'] = df['SAL'].apply(DataRefinery.clean_currency)
+        elif 'SALARY' in df.columns: standardized['salary'] = df['SALARY'].apply(DataRefinery.clean_currency)
+        else: standardized['salary'] = 0.0
         
-        # 4. PROPS (Prop Trigger)
-        is_prop = False
-        for c in ['prop', 'line', 'strike', 'total', 'ou']:
-            if c in df.columns:
-                standardized['prop_line'] = df[c].apply(DataRefinery.clean_currency)
-                is_prop = True
-                break
-                
-        # 5. METADATA
-        if 'team' in df.columns: standardized['team'] = df['team']
-        elif 'teamabbrev' in df.columns: standardized['team'] = df['teamabbrev']
+        # 4. POSITION (POS)
+        if 'POS' in df.columns: standardized['position'] = df['POS'].astype(str)
+        elif 'POSITION' in df.columns: standardized['position'] = df['POSITION'].astype(str)
+        else: standardized['position'] = 'FLEX'
         
-        if 'position' in df.columns: standardized['position'] = df['position']
-        elif 'roster position' in df.columns: standardized['position'] = df['roster position']
+        # 5. TEAM
+        if 'TEAM' in df.columns: standardized['team'] = df['TEAM'].astype(str)
+        elif 'TM' in df.columns: standardized['team'] = df['TM'].astype(str)
+        else: standardized['team'] = 'N/A'
 
-        file_type = "DFS" if is_dfs else ("PROPS" if is_prop else "PROJECTIONS")
-        return standardized, file_type
+        # 6. PROPS (Look for '1+ TD', 'SPRD', 'O/U')
+        # We try to synthesize a line if explicit Prop line isn't there, 
+        # or map existing ones.
+        if 'O/U' in df.columns: standardized['prop_line'] = df['O/U'].apply(DataRefinery.clean_currency)
+        elif 'PROP' in df.columns: standardized['prop_line'] = df['PROP'].apply(DataRefinery.clean_currency)
+        else: standardized['prop_line'] = 0.0
+
+        # --- CLASSIFICATION ---
+        is_dfs = standardized['salary'].sum() > 0
+        is_prop = standardized['prop_line'].sum() > 0
+        
+        ftype = "DFS" if is_dfs else ("PROPS" if is_prop else "PROJECTIONS")
+        return standardized, ftype
 
     @staticmethod
-    def smart_merge(base_df, new_df):
-        """Fuzzy merges data."""
-        if base_df.empty: return new_df
-        base_names = base_df['name'].unique()
-        name_map = {}
+    def smart_merge(base, new_df):
+        if base.empty: return new_df
+        # Fuzzy Match Logic
+        base_names = base['name'].unique()
+        mapping = {}
         for name in new_df['name'].unique():
-            matches = difflib.get_close_matches(name, base_names, n=1, cutoff=0.85)
-            name_map[name] = matches[0] if matches else name
-                
-        new_df['merge_key'] = new_df['name'].map(name_map)
-        cols_to_add = [c for c in new_df.columns if c not in base_df.columns and c != 'merge_key' and c != 'name']
-        merged = base_df.merge(new_df[['merge_key'] + cols_to_add], left_on='name', right_on='merge_key', how='left')
+            matches = difflib.get_close_matches(name, base_names, n=1, cutoff=0.80)
+            if matches: mapping[name] = matches[0]
+            
+        new_df['merge_key'] = new_df['name'].map(mapping).fillna(new_df['name'])
+        
+        # Merge
+        cols = [c for c in new_df.columns if c not in base.columns and c != 'merge_key' and c != 'name']
+        merged = base.merge(new_df[['merge_key'] + cols], left_on='name', right_on='merge_key', how='left')
+        
+        # Update Projections if new file has them and old one didn't
+        if 'projection_y' in merged.columns:
+            merged['projection'] = np.where(merged['projection_x'] > 0, merged['projection_x'], merged['projection_y'])
+            merged = merged.drop(columns=['projection_x', 'projection_y', 'merge_key'])
+            
         return merged
 
 # ==========================================
@@ -177,18 +200,12 @@ class DataRefinery:
 
 def run_ai_scout(sport):
     intel = {}
-    queries = [
-        f"{sport} dfs sleepers value plays analysis",
-        f"{sport} player prop bets best over under today",
-        f"{sport} injury news impact report"
-    ]
     try:
         with DDGS() as ddgs:
-            for q in queries:
-                results = list(ddgs.text(q, max_results=5))
-                for r in results:
-                    text_blob = (r['title'] + " " + r['body']).lower()
-                    intel[text_blob] = 1 
+            q = f"{sport} dfs sleepers and prop bets analysis"
+            for r in list(ddgs.text(q, max_results=5)):
+                blob = (r['title'] + " " + r['body']).lower()
+                intel[blob] = 1
         return intel
     except: return {}
 
@@ -226,14 +243,15 @@ def optimize_dfs(df, config):
         prob += pulp.lpSum([pool.loc[i, target_col] * x[i] for i in pool.index])
         prob += pulp.lpSum([pool.loc[i, 'salary'] * x[i] for i in pool.index]) <= cap
         
-        # Roster Constraints
-        roster_size = 9 # Default
+        # Roster Constraints (Simplified Generic for Multi-Sport)
+        # NFL: 9 spots, NBA: 8 spots typically
+        roster_size = 9 if config['sport'] == 'NFL' else 8
         prob += pulp.lpSum([x[i] for i in pool.index]) == roster_size
         
-        # NFL Stack Logic (Simple)
-        if config['sport'] == 'NFL' and config['stacking']:
-            qbs = pool[pool['position'].str.contains("QB", na=False)]
-            if len(qbs) > 0: prob += pulp.lpSum([x[i] for i in qbs.index]) == 1
+        # NFL QB Constraint
+        if config['sport'] == 'NFL':
+             qbs = pool[pool['position'].str.contains('QB', na=False)]
+             if len(qbs) > 0: prob += pulp.lpSum([x[i] for i in qbs.index]) == 1
         
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
@@ -251,17 +269,17 @@ def optimize_dfs(df, config):
         
     return pd.concat(lineups) if lineups else None
 
-def get_csv_download(df, filename="titan_export.csv"):
+def get_csv_download(df, name):
     csv = df.to_csv(index=False).encode('utf-8')
     b64 = base64.b64encode(csv).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}" class="stButton" style="text-decoration:none; color:#00d2ff; border:1px solid #00d2ff; padding:5px; border-radius:5px;">📥 DOWNLOAD CSV</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="{name}" class="stButton">📥 DOWNLOAD {name}</a>'
 
 # ==========================================
 # 🖥️ 6. DASHBOARD INTERFACE
 # ==========================================
 
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Definitive Edition")
+st.sidebar.caption("Rotowire / Abbrev Compatible")
 sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "NHL"])
 bankroll = st.sidebar.number_input("Bankroll ($)", 1000)
 
@@ -270,6 +288,7 @@ tabs = st.tabs(["1. 📡 Intel & Data", "2. 🏰 DFS Factory", "3. 🎫 Prop Sni
 # --- TAB 1: DATA INGEST ---
 with tabs[0]:
     st.header("Data Ingestion Hub")
+    st.info("Compatible with files containing: SAL, FPTS, POS, PLAYER")
     
     c1, c2 = st.columns([1, 2])
     with c1:
@@ -282,7 +301,7 @@ with tabs[0]:
             
     with c2:
         st.markdown("### 2. File Fusion")
-        files = st.file_uploader("Upload CSVs (DK/FD/Props/Projections)", accept_multiple_files=True)
+        files = st.file_uploader("Upload CSVs", accept_multiple_files=True)
         if st.button("🧬 Fuse Data"):
             refinery = DataRefinery()
             
@@ -290,15 +309,22 @@ with tabs[0]:
             prop_temp = pd.DataFrame()
             proj_temp = pd.DataFrame()
             
+            log = []
+            
             for f in files:
                 try:
-                    if f.name.endswith('.csv'): raw = pd.read_csv(f)
-                    else: raw = pd.read_excel(f)
+                    # Handle BOM / Encoding issues commonly found in export files
+                    try: raw = pd.read_csv(f, encoding='utf-8-sig')
+                    except: raw = pd.read_excel(f)
+                    
                     clean_df, ftype = refinery.detect_and_clean(raw)
+                    log.append(f"File: {f.name} | Detected: {ftype} | Cols: {list(clean_df.columns)}")
+                    
                     if ftype == "DFS": dfs_temp = clean_df
                     elif ftype == "PROPS": prop_temp = clean_df
                     elif ftype == "PROJECTIONS": proj_temp = clean_df
-                except: pass
+                except Exception as e:
+                    log.append(f"Error reading {f.name}: {e}")
                 
             # Merge Logic
             if not proj_temp.empty:
@@ -312,7 +338,10 @@ with tabs[0]:
 
             st.session_state['dfs_pool'] = dfs_temp
             st.session_state['prop_pool'] = prop_temp
-            st.success(f"Data Fused. DFS: {len(dfs_temp)} | Props: {len(prop_temp)}")
+            
+            st.success(f"Fusion Complete. DFS Pool: {len(dfs_temp)} | Prop Pool: {len(prop_temp)}")
+            with st.expander("Show Ingest Logs"):
+                for l in log: st.write(l)
 
 # --- TAB 2: DFS FACTORY ---
 with tabs[1]:
@@ -320,19 +349,19 @@ with tabs[1]:
     df = st.session_state['dfs_pool']
     
     if df.empty:
-        st.warning("No DFS Data (Salaries) Found.")
+        st.warning("No DFS Data (Salaries) Found. Please upload a file with 'SAL' or 'SALARY'.")
     else:
+        # Metric: Value Score (Points per $1k)
         df['value_score'] = (df['projection'] / df['salary']) * 1000
         
         c1, c2, c3 = st.columns(3)
         site = c1.selectbox("Site", ["DK", "FD"])
         cap = 50000 if site == 'DK' else 60000
         mode = c2.selectbox("Mode", ["Optimal (Cash)", "Slate Breaker (GPP)"])
-        stack = c3.checkbox("Stack QB+WR (NFL)", value=True)
         count = st.slider("Lineups to Build", 1, 50, 5)
         
         if st.button("⚡ Run Optimizer"):
-            config = {'site': site, 'cap': cap, 'sport': sport, 'stacking': stack, 'mode': mode, 'num_lineups': count}
+            config = {'site': site, 'cap': cap, 'sport': sport, 'mode': mode, 'num_lineups': count}
             res = optimize_dfs(df, config)
             
             if res is not None:
@@ -349,7 +378,7 @@ with tabs[1]:
                 qb = top_lu[top_lu['position'].str.contains("QB")].iloc[0]['name'] if 'QB' in top_lu['position'].values else "None"
                 st.info(f"STRATEGY: Anchored by {qb}. Mode: {mode}.")
             else:
-                st.error("Optimization Failed. Check constraints.")
+                st.error("Optimization Failed. Try selecting fewer lineups or checking if salary data exists.")
 
 # --- TAB 3: PROP SNIPER ---
 with tabs[2]:
@@ -357,7 +386,7 @@ with tabs[2]:
     df = st.session_state['prop_pool']
     
     if df.empty:
-        st.warning("No Prop Data Found.")
+        st.warning("No Prop Data Found. Upload file with 'O/U' or 'PROP'.")
     else:
         brain = TitanBrain(sport, bankroll)
         
@@ -394,8 +423,11 @@ with tabs[2]:
 
 # --- TAB 4: ANALYSIS ---
 with tabs[3]:
-    st.header("Raw Intelligence")
+    st.header("Raw Intelligence Inspector")
+    st.markdown("Use this tab to verify your column mapping.")
     if not st.session_state['dfs_pool'].empty:
-        st.write("DFS Pool:", st.session_state['dfs_pool'])
+        st.subheader("DFS Pool")
+        st.dataframe(st.session_state['dfs_pool'])
     if not st.session_state['prop_pool'].empty:
-        st.write("Prop Pool:", st.session_state['prop_pool'])
+        st.subheader("Prop Pool")
+        st.dataframe(st.session_state['prop_pool'])
