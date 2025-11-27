@@ -13,39 +13,77 @@ st.markdown("""
     div[data-testid="stMetricValue"] { color: #4ade80; font-size: 26px; font-weight: bold; }
     div[data-testid="stExpander"] { background-color: #1e293b; border: 1px solid #334155; border-radius: 8px; }
     .big-font { font-size: 18px !important; color: #94a3b8; }
-    .success-text { color: #4ade80; font-weight: bold; }
-    .danger-text { color: #f87171; font-weight: bold; }
+    [data-testid="stDataFrame"] { border: 1px solid #334155; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- HELPER FUNCTIONS ---
+# --- SMART DATA LOADER ---
+def standardize_columns(df):
+    """
+    Renames weird CSV columns to the standard names the app expects.
+    """
+    # Clean up column names (lowercase, no spaces)
+    df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_')
+    
+    # Mapping Dictionary: { Standard_Name : [Possible Variations] }
+    column_map = {
+        'name': ['player', 'athlete', 'full_name', 'name_id'],
+        'proj_pts': ['projection', 'proj', 'fpts', 'fantasy_points', 'pts_proj', 'ppg', 'avg_fpts'],
+        'prop_line': ['line', 'prop', 'ou', 'total', 'over_under', 'strike', 'pick_line'],
+        'salary': ['cost', 'sal', 'price', 'salary_cap'],
+        'team': ['squad', 'tm', 'team_id'],
+        'position': ['pos', 'position_id'],
+        'proj_mins': ['min', 'minutes', 'proj_min'],
+        'avg_mins': ['avg_min', 'season_min']
+    }
+    
+    renamed_cols = {}
+    for standard, variations in column_map.items():
+        if standard not in df.columns:
+            for v in variations:
+                # Look for columns that contain the variation keyword
+                match = next((c for c in df.columns if v in c), None)
+                if match:
+                    renamed_cols[match] = standard
+                    break
+    
+    if renamed_cols:
+        df = df.rename(columns=renamed_cols)
+        
+    # Force numbers to be numbers (not text)
+    cols_to_numeric = ['proj_pts', 'prop_line', 'salary', 'proj_mins', 'avg_mins']
+    for col in cols_to_numeric:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            
+    return df
+
 def load_data(uploaded_file):
     try:
         if uploaded_file.name.endswith('.csv'):
             df = pd.read_csv(uploaded_file)
         else:
             df = pd.read_excel(uploaded_file)
-        # Normalize column names
-        df.columns = df.columns.str.lower().str.replace(' ', '_')
+        
+        # Apply the Smart Fix
+        df = standardize_columns(df)
         return df
     except Exception as e:
         st.error(f"Error loading file: {e}")
         return None
 
-def optimize_lineup(df, salary_cap, roster_size, strategy="Optimal"):
+def optimize_lineup(df, salary_cap, roster_size):
+    # Filter out players with 0 projection or 0 salary to prevent errors
+    df = df[(df['proj_pts'] > 0) & (df['salary'] > 0)]
+    
     problem = pulp.LpProblem("DFS_Optimization", pulp.LpMaximize)
     player_vars = pulp.LpVariable.dicts("Player", df.index, cat='Binary')
     
-    # Constraints
-    problem += pulp.lpSum([df.loc[i, 'proj_pts'] * player_vars[i] for i in df.index]) # Objective
+    problem += pulp.lpSum([df.loc[i, 'proj_pts'] * player_vars[i] for i in df.index])
     problem += pulp.lpSum([df.loc[i, 'salary'] * player_vars[i] for i in df.index]) <= salary_cap
     problem += pulp.lpSum([player_vars[i] for i in df.index]) == roster_size
     
-    if strategy == "Stars & Scrubs (NBA)":
-        problem += pulp.lpSum([player_vars[i] for i in df.index if df.loc[i, 'salary'] >= 10000]) >= 2
-        
     solve_status = problem.solve(pulp.PULP_CBC_CMD(msg=0))
-    
     if solve_status == pulp.LpStatusOptimal:
         selected = [i for i in df.index if player_vars[i].varValue == 1]
         return df.loc[selected]
@@ -56,52 +94,63 @@ st.sidebar.title("🧠 Sports Brain")
 app_mode = st.sidebar.radio("Navigation", 
     ["📂 Data Upload", "🔬 Strategy Lab", "🏗️ Lineup Builder", "💸 Betting Edge Calculator"])
 
-# --- SESSION STATE ---
 if 'master_df' not in st.session_state:
-    # Mock Data with 'edge' implied
-    mock_data = pd.DataFrame([
-        {"name": "Tyus Jones", "team": "WAS", "position": "PG", "salary": 4300, "proj_mins": 32.0, "avg_mins": 18.5, "proj_pts": 30.4, "prop_line": 28.5, "confidence": 0.75},
-        {"name": "Naz Reid", "team": "MIN", "position": "C", "salary": 3800, "proj_mins": 28.0, "avg_mins": 14.0, "proj_pts": 32.2, "prop_line": 25.5, "confidence": 0.82},
-        {"name": "LeBron James", "team": "LAL", "position": "SF", "salary": 10500, "proj_mins": 36.0, "avg_mins": 35.0, "proj_pts": 52.2, "prop_line": 50.5, "confidence": 0.55},
-        {"name": "Luka Doncic", "team": "DAL", "position": "PG", "salary": 11800, "proj_mins": 38.0, "avg_mins": 37.0, "proj_pts": 61.0, "prop_line": 62.5, "confidence": 0.60},
-        {"name": "Christian Braun", "team": "DEN", "position": "SG", "salary": 3500, "proj_mins": 18.0, "avg_mins": 15.0, "proj_pts": 13.5, "prop_line": 15.5, "confidence": 0.40},
-    ])
-    st.session_state['master_df'] = mock_data
+    st.session_state['master_df'] = pd.DataFrame()
 
 # =========================================================
 # 📂 TAB 1: DATA UPLOAD
 # =========================================================
 if app_mode == "📂 Data Upload":
     st.title("📂 Upload Your Data")
-    st.markdown("Upload your CSV from **Props.cash**, **Underdog**, or **DFS Sites**.")
     uploaded_file = st.file_uploader("Drag and drop CSV here", type=['csv', 'xlsx'])
+    
     if uploaded_file:
         df = load_data(uploaded_file)
         if df is not None:
             st.session_state['master_df'] = df
-            st.success(f"✅ Loaded {len(df)} players!")
-            st.dataframe(df.head())
+            st.success(f"✅ Successfully ingested {len(df)} players!")
+            
+            # Diagnostic Panel
+            st.write("### 🔍 Smart Column Detection:")
+            cols = list(df.columns)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Name", "✅" if 'name' in cols else "❌")
+            c2.metric("Projection", "✅" if 'proj_pts' in cols else "❌")
+            c3.metric("Prop Line", "✅" if 'prop_line' in cols else "❌")
+            c4.metric("Salary", "✅" if 'salary' in cols else "❌")
+            
+            with st.expander("See Raw Data"):
+                st.dataframe(df.head())
 
 # =========================================================
-# 🔬 TAB 2: STRATEGY LAB (DFS)
+# 🔬 TAB 2: STRATEGY LAB
 # =========================================================
 elif app_mode == "🔬 Strategy Lab":
-    st.title("🔬 Strategy Lab (DFS)")
+    st.title("🔬 Strategy Lab")
     df = st.session_state['master_df']
-    strategy = st.radio("Select Strategy:", ["⏰ Minutes > Talent", "🏈 NFL Stacking"])
     
-    if strategy == "⏰ Minutes > Talent":
-        if 'proj_mins' in df.columns and 'avg_mins' in df.columns:
-            df['minute_diff'] = df['proj_mins'] - df['avg_mins']
-            df['value'] = (df['proj_pts'] / df['salary']) * 1000
-            opportunities = df[(df['minute_diff'] >= 5.0) & (df['salary'] <= 6000)].sort_values(by='value', ascending=False)
-            if not opportunities.empty:
-                st.dataframe(opportunities[['name', 'salary', 'minute_diff', 'value']])
+    if df.empty:
+        st.warning("⚠️ Upload data first!")
+    else:
+        strategy = st.radio("Select Strategy:", ["⏰ Minutes > Talent", "🏈 NFL Stacking"])
+        
+        if strategy == "⏰ Minutes > Talent":
+            if 'proj_mins' in df.columns and 'avg_mins' in df.columns:
+                df['minute_diff'] = df['proj_mins'] - df['avg_mins']
+                df['value'] = (df['proj_pts'] / df['salary']) * 1000
+                opps = df[(df['minute_diff'] >= 5.0) & (df['salary'] <= 6000)].sort_values(by='value', ascending=False)
+                st.dataframe(opps[['name', 'team', 'salary', 'minute_diff', 'value']])
             else:
-                st.warning("No minute surges found.")
-    elif strategy == "🏈 NFL Stacking":
-        if 'team' in df.columns:
-            st.write("NFL Stacking logic active...")
+                st.error("Missing 'minutes' data. Check your CSV columns.")
+
+        elif strategy == "🏈 NFL Stacking":
+            if 'team' in df.columns and 'proj_pts' in df.columns:
+                st.write("### Top Team Stacks")
+                # Group by team and sum points
+                stacks = df.groupby('team')['proj_pts'].sum().reset_index().sort_values(by='proj_pts', ascending=False)
+                st.dataframe(stacks.head(10))
+            else:
+                st.error("Missing 'team' or 'projection' data.")
 
 # =========================================================
 # 🏗️ TAB 3: LINEUP BUILDER
@@ -109,81 +158,49 @@ elif app_mode == "🔬 Strategy Lab":
 elif app_mode == "🏗️ Lineup Builder":
     st.title("🏗️ Automated Lineup Builder")
     df = st.session_state['master_df']
-    salary_cap = st.number_input("Salary Cap", 50000)
-    roster_size = st.number_input("Roster Size", 8)
-    if st.button("Generate Lineup"):
-        if 'proj_pts' in df.columns and 'salary' in df.columns:
+    
+    if df.empty or 'salary' not in df.columns:
+        st.warning("⚠️ Need data with 'Salary' column.")
+    else:
+        c1, c2 = st.columns(2)
+        salary_cap = c1.number_input("Salary Cap", 50000)
+        roster_size = c2.number_input("Roster Size", 8)
+        
+        if st.button("Generate Optimal Lineup"):
             res = optimize_lineup(df, salary_cap, roster_size)
             if res is not None:
-                st.success(f"Optimal Lineup ({res['proj_pts'].sum():.1f} Proj Pts)")
-                st.dataframe(res)
+                st.balloons()
+                st.success(f"🏆 Proj Score: {res['proj_pts'].sum():.1f}")
+                st.dataframe(res[['name', 'team', 'salary', 'proj_pts']])
             else:
-                st.error("No valid lineup found.")
+                st.error("Infeasible. Try increasing cap or changing roster size.")
 
 # =========================================================
-# 💸 TAB 4: BETTING EDGE CALCULATOR (NEW!)
+# 💸 TAB 4: BETTING EDGE CALCULATOR
 # =========================================================
 elif app_mode == "💸 Betting Edge Calculator":
     st.title("💸 Unlimited Betting Edge Calculator")
-    st.markdown("Generates **Master Pools** of all qualifying props based on your new logic.")
+    df = st.session_state['master_df']
     
-    df = st.session_state['master_df'].copy()
-    
-    if 'prop_line' in df.columns and 'proj_pts' in df.columns:
-        # Calculate Edge
-        # Edge formula: (Projection - Line) / Line
+    if df.empty: 
+        st.warning("Upload data first.")
+    elif 'prop_line' in df.columns and 'proj_pts' in df.columns:
+        
+        # Calc Edge
         df['edge_pct'] = ((df['proj_pts'] - df['prop_line']) / df['prop_line']) * 100
         df['pick_type'] = np.where(df['edge_pct'] > 0, 'OVER', 'UNDER')
         
-        # Ensure confidence column exists (default to 0.5 if missing)
-        if 'confidence' not in df.columns:
-            df['confidence'] = 0.5
-            
-        # --- LOGIC ENGINE ---
-        
-        # 1. UNDERDOG GENERATION (Edge > -0.5%)
-        # "Finds ALL unique players with qualifying edges > -0.5"
+        # Filter Logic
         ud_pool = df[df['edge_pct'] > -0.5].sort_values(by='edge_pct', ascending=False)
         
-        # 2. PICK6 GENERATION (Deterministic + Diversity)
-        # Deterministic: Edge > -0.2
-        # Diversity: |Edge| > 0.3 AND Confidence > 0.6
-        p6_deterministic = df[df['edge_pct'] > -0.2]
-        p6_diversity = df[(df['edge_pct'].abs() > 0.3) & (df['confidence'] > 0.6)]
-        p6_pool = pd.concat([p6_deterministic, p6_diversity]).drop_duplicates().sort_values(by='edge_pct', ascending=False)
+        st.subheader(f"✅ Found {len(ud_pool)} Qualifying Props")
         
-        # 3. CONFIDENCE SLIPS (Edge > -0.3%)
-        conf_pool = df[df['edge_pct'] > -0.3].sort_values(by='confidence', ascending=False)
-        
-        # --- DISPLAY RESULTS ---
-        
-        tab1, tab2, tab3 = st.tabs(["🐶 Underdog Master Pool", "🎯 Pick6 Master Pool", "🔒 Confidence Pool"])
-        
-        with tab1:
-            st.subheader(f"Underdog Pool ({len(ud_pool)} Plays)")
-            st.write("Criteria: Edge > -0.5% (Max Volume)")
-            if not ud_pool.empty:
-                st.dataframe(ud_pool[['name', 'team', 'prop_line', 'proj_pts', 'pick_type', 'edge_pct']].style.background_gradient(subset=['edge_pct'], cmap='Greens'), use_container_width=True)
-            else:
-                st.warning("No plays qualify for Underdog criteria.")
-                
-        with tab2:
-            st.subheader(f"Pick6 Pool ({len(p6_pool)} Plays)")
-            st.write("Criteria: Edge > -0.2% OR (Edge > 0.3% & Conf > 60%)")
-            if not p6_pool.empty:
-                st.dataframe(p6_pool[['name', 'team', 'prop_line', 'proj_pts', 'pick_type', 'edge_pct', 'confidence']].style.background_gradient(subset=['confidence'], cmap='Blues'), use_container_width=True)
-            else:
-                st.warning("No plays qualify for Pick6 criteria.")
-                
-        with tab3:
-            st.subheader(f"Confidence Pool ({len(conf_pool)} Plays)")
-            st.write("Criteria: Edge > -0.3% (Sorted by Confidence)")
-            if not conf_pool.empty:
-                st.dataframe(conf_pool[['name', 'team', 'pick_type', 'edge_pct', 'confidence']].style.format({'confidence': '{:.0%}'}), use_container_width=True)
-            else:
-                st.warning("No plays qualify for Confidence criteria.")
-
+        # Use simple dataframe first to ensure no styling errors
+        st.dataframe(
+            ud_pool[['name', 'team', 'prop_line', 'proj_pts', 'pick_type', 'edge_pct']]
+            .style.background_gradient(subset=['edge_pct'], cmap='Greens'),
+            use_container_width=True
+        )
     else:
-        st.error("⚠️ Data Missing: Your CSV must have `prop_line` and `proj_pts` columns to calculate edges.")
-        with st.expander("See Example CSV Structure"):
-            st.code("name,team,proj_pts,prop_line,confidence\nLeBron James,LAL,28.5,26.5,0.75", language="csv")
+        st.error("⚠️ Data Missing Projections or Lines")
+        st.write("Columns found:", list(df.columns))
