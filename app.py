@@ -3,29 +3,32 @@ import pandas as pd
 import numpy as np
 import pulp
 import base64
-from duckduckgo_search import DDGS
-from sklearn.preprocessing import MinMaxScaler
+import requests
+import feedparser
 import math
+import sys
+
+# Increase recursion limit for the pulp solver
+sys.setrecursionlimit(2000)
+
+# Try importing NFL data (may fail in some cloud environments, so we handle it)
+try:
+    import nfl_data_py as nfl
+    NFL_DATA_AVAILABLE = True
+except ImportError:
+    NFL_DATA_AVAILABLE = False
 
 # ==========================================
-# ⚙️ 1. TITAN CONFIGURATION
+# ⚙️ 1. TITAN AI CONFIGURATION
 # ==========================================
 st.set_page_config(layout="wide", page_title="TITAN COMMAND: FINAL FUSION", page_icon="💥")
 
-# --- UI STYLING ---
 st.markdown("""
 <style>
     .stApp { background-color: #0b0f19; color: #e2e8f0; font-family: 'Roboto', sans-serif; }
-    
-    /* Metrics */
     div[data-testid="stMetricValue"] { color: #38bdf8; font-size: 24px; font-weight: 800; }
-    
-    /* Tables */
-    [data-testid="stDataFrame"] { border: 1px solid #334155; border-radius: 5px; }
-    
-    /* Buttons */
+    .reasoning-text { font-size: 12px; color: #94a3b8; font-style: italic; border-left: 2px solid #3b82f6; padding-left: 8px; }
     .stButton>button { width: 100%; border-radius: 6px; font-weight: bold; background-color: #3b82f6; border: none; }
-    .stButton>button:hover { background-color: #2563eb; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -41,21 +44,21 @@ class TitanBrain:
         
     def evaluate_player(self, row):
         reasons = []
-        score = 50.0 
+        score = 50.0 # Base Score
         
         # 1. LEVERAGE LOGIC
         if 'rank_proj' in row and 'rank_own' in row and row['rank_proj'] > 0 and row['rank_own'] > 0:
             leverage_diff = row['rank_own'] - row['rank_proj']
             if leverage_diff > 15:
                 score += 15
-                reasons.append(f"💎 High Leverage (Underrated by {leverage_diff} spots)")
+                reasons.append(f"💎 High Leverage (Contrarian Value)")
             elif leverage_diff < -10:
                 score -= 10
                 reasons.append("⚠️ Chalk Trap (Overowned)")
                 
-        # 2. GAME SCRIPT LOGIC (NFL Focused)
-        if self.sport == "NFL" and abs(self.spread) > 7:
-            if 'WR' in str(row.get('position', '')):
+        # 2. GAME SCRIPT LOGIC (NFL Focus)
+        if self.sport == "NFL" and 'position' in row:
+            if abs(self.spread) > 7 and 'WR' in str(row['position']):
                 score += 7
                 reasons.append("📜 Blowout Script: Garbage Time potential")
 
@@ -76,16 +79,17 @@ class TitanBrain:
         return final_score, verdict_text
 
 # ==========================================
-# 🛠️ 4. DATA PROCESSING & UTILITIES
+# 🛠️ 3. DATA PROCESSING & UTILITIES
 # ==========================================
 
 def standardize_columns(df):
+    """Universal Translator & Cleaner"""
     df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_').str.replace('$', '').str.replace(',', '').str.replace('%', '')
     column_map = {
         'name': ['player', 'athlete', 'full_name'], 'proj_pts': ['projection', 'proj', 'fpts', 'median'],
-        'ownership': ['own', 'own', 'projected_ownership'], 'salary': ['cost', 'sal', 'price'],
-        'prop_line': ['line', 'prop', 'ou', 'total', 'strike'], 'position': ['pos', 'position_id'],
-        'team': ['squad', 'tm'], 'air_yards': ['air_yards', 'ay']
+        'ownership': ['own', 'projected_ownership'], 'salary': ['cost', 'sal', 'price'],
+        'prop_line': ['line', 'prop', 'ou', 'total', 'strike'], 'position': ['pos', 'roster_position'],
+        'team': ['squad', 'tm'], 'ceiling': ['ceil', 'max_pts'], 'opp_rank': ['dvp', 'opp_rank']
     }
     renamed = {}
     for std, alts in column_map.items():
@@ -94,75 +98,86 @@ def standardize_columns(df):
                 if any(a in col for a in alts): renamed[col] = std
     df = df.rename(columns=renamed)
     
-    # Numeric Cleanup
-    for c in ['proj_pts', 'salary', 'ownership', 'prop_line', 'ceiling']:
-        if c in df.columns: df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
-    
+    # Clean Numerics
+    cols = ['proj_pts', 'salary', 'ownership', 'prop_line', 'ceiling']
+    for c in cols:
+        if c in df.columns:
+            if df[c].dtype == object:
+                df[c] = df[c].astype(str).str.replace('$', '').str.replace(',', '').str.replace('%', '')
+            df[c] = pd.to_numeric(df[c], errors='coerce').fillna(0)
+            
     if 'position' in df.columns:
         df['position'] = df['position'].astype(str).str.upper().str.replace('/', ',')
         
     return df
 
 def process_and_analyze(files, sport, spread, total):
-    df = pd.DataFrame()
-    if files:
-        df = pd.DataFrame()
-        for f in files:
-            try:
-                if f.name.endswith('.csv'): temp_df = pd.read_csv(f)
-                else: temp_df = pd.read_excel(f)
-                temp_df = standardize_columns(temp_df)
-                if df.empty: df = temp_df
-                else:
-                    cols_to_merge = [c for c in temp_df.columns if c not in df.columns or c == 'name']
-                    if 'name' in temp_df.columns: 
-                        df = df.merge(temp_df[cols_to_merge], on='name', how='left', suffixes=('', '_new'))
-                        for col in [c for c in df.columns if col.endswith('_new')]:
-                            df[col.replace('_new', '')] = df[col].fillna(df[col.replace('_new', '')])
-                            df = df.drop(columns=[col])
-            except Exception as e: st.error(f"Error loading file: {e}")
-                
-        # --- TITAN BRAIN EXECUTION ---
-        if 'proj_pts' in df.columns and 'ownership' in df.columns:
-            df['rank_proj'] = df['proj_pts'].rank(ascending=False)
-            df['rank_own'] = df['ownership'].rank(ascending=False)
+    """Handles multi-file ingestion and runs the Titan Brain."""
+    master = pd.DataFrame()
+    for file in files:
+        try:
+            if file.name.endswith('.csv'): df = pd.read_csv(file)
+            else: df = pd.read_excel(file)
+            df = standardize_columns(df)
             
-            brain = TitanBrain(sport, spread, total)
-            results = df.apply(lambda row: brain.evaluate_player(row), axis=1, result_type='expand')
-            df['shark_score'] = results[0]
-            df['reasoning'] = results[1]
+            # --- SAFETY CHECK (Prevents the Arg Error) ---
+            for col in df.columns:
+                if df[col].apply(lambda x: isinstance(x, (list, dict, np.ndarray)) and len(x) > 0).any():
+                    df = df.drop(columns=[col]) # Drop complex columns before merge
+            
+            # Merge Logic
+            if master.empty: master = df
+            elif 'name' in master.columns and 'name' in df.columns:
+                cols_to_merge = [c for c in df.columns if c not in master.columns or c == 'name']
+                master = master.merge(df[cols_to_merge], on='name', how='left')
+                
+        except Exception as e: st.error(f"Error loading file: {e}")
+            
+    # RUN SHARK LOGIC
+    if 'proj_pts' in master.columns and 'ownership' in master.columns:
+        master['rank_proj'] = master['proj_pts'].rank(ascending=False)
+        master['rank_own'] = master['ownership'].rank(ascending=False)
         
-    return df
+        brain = TitanBrain(sport, spread, total)
+        results = master.apply(lambda row: brain.evaluate_player(row), axis=1, result_type='expand')
+        master['shark_score'] = results[0]
+        master['reasoning'] = results[1]
+        
+    return master
 
 def get_player_pool(df, top_n_shark=25, top_n_value=15):
-    """Generates the final player pool."""
+    """Generates the final player pool based on multiple criteria."""
     if df.empty or 'shark_score' not in df.columns: return pd.DataFrame()
 
-    # 1. Primary Filter: Best Overall Players
     pool_shark = df.nlargest(top_n_shark, 'shark_score')
     
-    # 2. High Value Punts (High Risk/Reward)
-    if 'value' in df.columns:
-        pool_value = df[df['salary'] < 5500].nlargest(top_n_value, 'value')
+    if 'salary' in df.columns and 'proj_pts' in df.columns:
+        df['value'] = (df['proj_pts'] / df['salary']) * 1000
+        low_sal_thresh = 5000 
+        pool_value = df[df['salary'] <= low_sal_thresh].nlargest(top_n_value, 'value')
     else:
         pool_value = pd.DataFrame()
 
     final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset=['name'])
     return final_pool.sort_values(by='shark_score', ascending=False)
 
+def get_csv_download(df):
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="titan_lineups.csv" class="stButton">📥 Download CSV</a>'
+
 # ==========================================
-# 🏗️ 5. OPTIMIZER & EXPORT
+# 🏗️ 4. OPTIMIZER & LIVE INTEL
 # ==========================================
 
 def optimize_lineup(df, config):
-    # This function remains the core solver with explicit constraints
+    # This remains the core solver with explicit constraints
     site, sport, cap, num_lineups, target_col, use_correlation = (
         config['site'], config['sport'], config['cap'], config['num_lineups'], config['target_col'], config['use_correlation']
     )
     
     pool = df[(df[target_col] > 0) & (df['salary'] > 0)].reset_index(drop=True)
     roster_size = 9 if sport=="NFL" else 8
-    
     valid_lineups = []
     
     for _ in range(num_lineups):
@@ -176,31 +191,46 @@ def optimize_lineup(df, config):
         # Position Logic (NFL Example)
         if sport == "NFL":
             qbs = pool[pool['position'].str.contains('QB', na=False)]
+            dsts = pool[pool['position'].str.contains('DST|DEF', na=False)]
             prob += pulp.lpSum([x[i] for i in qbs.index]) == 1
-            if use_correlation:
-                # Force QB Stacking
+            prob += pulp.lpSum([x[i] for i in dsts.index]) == 1
+            
+            if use_correlation: # AUTO-STACKING
                 for qb_idx in qbs.index:
                     team = pool.loc[qb_idx, 'team']
                     stack_partners = pool[(pool['team'] == team) & (pool['position'].str.contains('WR|TE', na=False))]
                     prob += pulp.lpSum([x[i] for i in stack_partners.index]) >= x[qb_idx]
         
-        # Solve
+        elif sport == "NBA":
+             prob += pulp.lpSum([x[i] for i in pool.index]) == 8
+             # NBA positional constraints here...
+
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
+        
         if prob.status == pulp.LpStatusOptimal:
             sel = [i for i in pool.index if x[i].varValue == 1]
             lineup = pool.loc[sel].copy()
             lineup['Lineup_ID'] = _ + 1
             valid_lineups.append(lineup)
-            prob += pulp.lpSum([x[i] for i in sel]) <= len(sel) - 1
+            prob += pulp.lpSum([x[i] for i in sel]) <= len(sel) - 1 # Diversity constraint
         else: break
             
     return pd.concat(valid_lineups) if valid_lineups else None
 
-def kelly_criterion(bankroll, odds_decimal, win_probability, multiplier=1.0):
+def kelly_criterion(bankroll, odds_decimal, win_probability, multiplier=0.5):
     """Calculates optimal fraction of bankroll to wager."""
     b = odds_decimal - 1 # Net odds
     f = (b * win_probability - (1 - win_probability)) / b
     return max(0, f * multiplier)
+
+# --- LIVE INTEL UPLINKS ---
+@st.cache_data(ttl=300) 
+def fetch_rotowire_news(sport):
+    urls = {"NFL": "https://www.rotowire.com/rss/news.htm?sport=nfl", "NBA": "https://www.rotowire.com/rss/news.htm?sport=nba"}
+    try:
+        feed = feedparser.parse(urls.get(sport, urls['NFL']))
+        return [{"title": x.title, "summary": x.summary} for x in feed.entries[:5]]
+    except: return []
 
 # ==========================================
 # 🖥️ 6. UI DASHBOARD
@@ -209,23 +239,22 @@ def kelly_criterion(bankroll, odds_decimal, win_probability, multiplier=1.0):
 st.sidebar.title("🦁 TITAN APEX CORE")
 sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "NHL"], index=0)
 site = st.sidebar.selectbox("Sportsbook", ["DraftKings", "FanDuel", "Yahoo", "PrizePicks", "Underdog"])
-st.sidebar.markdown("---")
 
 # AUTO-CAP FOR DISPLAY
 default_cap = 50000
 if site == "FanDuel": default_cap = 60000
 elif site == "Yahoo": default_cap = 200
 
-# STATE MANAGEMENT
-if 'master' not in st.session_state: st.session_state['master'] = pd.DataFrame()
-if 'cap' not in st.session_state: st.session_state['cap'] = default_cap
+st.sidebar.markdown("---")
+st.session_state['site'] = site
+st.session_state['cap'] = default_cap
 
-tabs = st.tabs(["1. 📂 Data Ingest", "2. 🎯 Player Pool", "3. 🏗️ Optimizer", "4. 💸 Prop Sniper"])
+tabs = st.tabs(["1. 💾 Ingest & Settings", "2. 🎯 Player Pool", "3. 🏗️ Optimizer", "4. 💸 Prop Sniper", "5. 📰 Live Intel"])
 
 # --- TAB 1: DATA INGEST ---
 with tabs[0]:
-    st.title("1. 📂 Data & Logic Ingest")
-    st.info("Upload Projections, Ownership, and Prop files. Everything will be merged and cleaned.")
+    st.title("1. 💾 Data Ingest & Logic Settings")
+    st.info("Upload Projections, Ownership, and Prop files. The Titan Brain will analyze everything.")
     
     files = st.file_uploader("Drop Files", accept_multiple_files=True)
     
@@ -234,7 +263,7 @@ with tabs[0]:
     spread = c1.number_input("Vegas Spread (Avg)", -20.0, 20.0, 0.0)
     total = c2.number_input("Vegas Total (Avg)", 150, 250, 210)
     
-    if st.button("🚀 Process All Data"):
+    if st.button("🚀 Process & Run Titan Brain"):
         with st.spinner("Calculating Shark Scores..."):
             df = process_and_analyze(files, sport, spread, total)
             st.session_state['master'] = df
@@ -242,26 +271,26 @@ with tabs[0]:
 
 # --- TAB 2: PLAYER POOL & UPSIDE ---
 with tabs[1]:
-    st.title("2. 🎯 Player Pool & High Upside")
     df = st.session_state['master']
-    
+    st.title("2. 🎯 Best Player Pool & Upside")
+
     if df.empty: st.warning("Upload data first.")
     else:
         # Get Pool based on analysis
         pool_df = get_player_pool(df)
         
         st.subheader("Final Player Pool Roster")
-        st.info("This list contains players with high Shark Scores, high ceiling, and good value.")
+        st.info(f"Pool size: {len(pool_df)} players. Sorted by Shark Score (Best Overall Play).")
         
         # Player Position Filter
         if 'position' in pool_df.columns:
             all_pos = ['ALL'] + sorted(list(pool_df['position'].unique()))
-            pos_filter = st.selectbox("Filter by Position", all_pos)
+            pos_filter = st.selectbox("Filter Pool by Position", all_pos)
             if pos_filter != 'ALL':
                 pool_df = pool_df[pool_df['position'] == pos_filter]
 
         st.dataframe(
-            pool_df[['name', 'position', 'salary', 'proj_pts', 'shark_score', 'reasoning']].head(40),
+            pool_df[['name', 'position', 'salary', 'proj_pts', 'shark_score', 'reasoning']],
             use_container_width=True
         )
 
@@ -278,44 +307,44 @@ with tabs[1]:
 
 # --- TAB 3: OPTIMIZER ---
 with tabs[2]:
-    st.title(f"3. 🏗️ {site} Lineup Builder")
     df = st.session_state['master']
+    st.title(f"3. 🏗️ {st.session_state['site']} Lineup Builder")
     
     if df.empty: st.warning("Upload data first.")
     else:
+        # Use the generated pool for optimization
+        optimizer_pool = get_player_pool(df)
+        
+        st.metric("Salary Cap Enforced", f"${st.session_state['cap']:,}")
+        
         c1, c2, c3 = st.columns(3)
         num = c1.number_input("Lineups (MME Max 150)", 1, 150, 10)
-        cap = c2.number_input("Salary Cap", value=st.session_state['cap'])
-        target = c3.selectbox("Optimization Goal", ["Shark Score (GPP)", "Projected Points (Cash)"])
-        
-        corr = st.checkbox("✅ Auto-Correlation (Stacking/Pairing)", value=True, help="Forces QB+WR stacks in NFL, etc.")
+        target = c2.selectbox("Optimization Goal", ["Shark Score (GPP)", "Projected Points (Cash)"])
+        corr = c3.checkbox("✅ Auto-Correlation (Stacking/Pairing)", value=True)
         
         if st.button("⚡ BUILD SLATE-BREAKING LINEUPS"):
-            pool_df = get_player_pool(df) # Ensure only smart players are used
-            
-            config = {'site': site, 'sport': sport, 'cap': cap, 'num_lineups': num, 'target_col': 'shark_score' if target == "Shark Score (GPP)" else 'proj_pts', 'use_correlation': corr}
+            config = {'site': site, 'sport': sport, 'cap': st.session_state['cap'], 'num_lineups': num, 'target_col': 'shark_score' if target == "Shark Score (GPP)" else 'proj_pts', 'use_correlation': corr}
             
             with st.spinner(f"Optimizing {num} lineups..."):
-                res = optimize_lineup(pool_df, config)
+                res = optimize_lineup(optimizer_pool, config)
             
             if res is not None:
                 st.success(f"Generated {num} Lineups!")
                 st.metric("Avg Lineup Score", f"{res.groupby('Lineup_ID')['proj_pts'].sum().mean():.2f}")
                 st.markdown(get_csv_download(res), unsafe_allow_html=True)
-            else: st.error("Optimization Failed. Check if pool size is too small.")
+            else: st.error("Optimization Failed. Check pool size or constraints.")
 
 # --- TAB 4: PROP SNIPER ---
 with tabs[3]:
-    st.title("4. 💸 Prop Sniper & Bankroll")
     df = st.session_state['master']
+    st.title("4. 💸 Prop Sniper & Bankroll")
     
-    if 'prop_line' not in df.columns:
-        st.warning("No Prop Lines found in data.")
+    if 'prop_line' not in df.columns: st.warning("No Prop Lines found in data.")
     else:
-        st.subheader("Prop Edge Analysis")
         df['edge'] = ((df['proj_pts'] - df['prop_line']) / df['prop_line']) * 100
         df['pick'] = np.where(df['edge']>0, 'OVER', 'UNDER')
         
+        st.subheader("Prop Edge Analysis")
         st.dataframe(
             df.sort_values('edge', ascending=False)[['name', 'prop_line', 'proj_pts', 'pick', 'edge']],
             use_container_width=True
@@ -323,13 +352,28 @@ with tabs[3]:
         
         st.markdown("---")
         st.subheader("💰 Bankroll Management (Kelly Criterion)")
-        st.info("Use the recommended percentage to maximize growth while managing risk.")
         
         c1, c2, c3 = st.columns(3)
         bankroll = c1.number_input("Total Bankroll ($)", value=1000)
         prob_win = c2.number_input("Est. Win Probability (e.g., 0.55)", 0.0, 1.0, 0.55, step=0.01)
         odds_decimal = c3.number_input("Odds (Decimal, e.g., 2.0)", 1.0, 10.0, 2.0)
         
+        # Calculate Kelly and display
         kelly_frac = kelly_criterion(bankroll, odds_decimal, prob_win, multiplier=0.5)
-        
         st.metric("Recommended Wager (50% Kelly)", f"${bankroll * kelly_frac:.2f}", f"{kelly_frac:.2%} of Bankroll")
+
+# --- TAB 5: LIVE INTEL ---
+with tabs[4]:
+    st.title("5. 📡 Live Intel & News Wire")
+    st.info("Live data fetching can be slow. Results are cached.")
+    
+    st.subheader("🚨 Breaking News Wire")
+    news = fetch_rotowire_news(sport)
+    if st.button("🔄 Refresh News"): st.cache_data.clear()
+    
+    for item in news:
+        st.markdown(f"""
+        <div style="background:#1e293b; border-left:4px solid #3b82f6; padding:10px; margin-bottom:10px; border-radius:4px;">
+            <div style="font-weight:bold; color:#f8fafc;">{item['title']}</div>
+        </div>
+        """, unsafe_allow_html=True)
