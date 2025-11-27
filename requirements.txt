@@ -2,4 +2,8 @@ streamlit
 pandas
 numpy
 pulp
-jinja2
+openpyxl
+feedparser
+nfl_data_py
+requests
+pybaseball
