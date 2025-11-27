@@ -2,9 +2,7 @@ streamlit
 pandas
 numpy
 pulp
-openpyxl
-feedparser
-nfl_data_py
-requests
-pybaseball
+scikit-learn
 duckduckgo-search
+openpyxl
+requests
