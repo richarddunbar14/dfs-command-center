@@ -138,7 +138,7 @@ def process_and_analyze(files, sport, spread, total):
                 
         except Exception as e: st.error(f"Error loading file: {e}")
             
-    # RUN SHARK LOGIC only if possible
+    # RUN SHARK LOGIC only if essential columns are present
     if 'proj_pts' in master.columns and 'ownership' in master.columns:
         master['rank_proj'] = master['proj_pts'].rank(ascending=False)
         master['rank_own'] = master['ownership'].rank(ascending=False)
@@ -160,7 +160,7 @@ def get_player_pool(df, top_n_shark=25, top_n_value=15):
 
     if df.empty: return pd.DataFrame()
 
-    # FIX: Resetting index before concatenation to prevent InvalidIndexError
+    # FIX: Reset index on subsets before concat (Prevents InvalidIndexError)
     pool_shark = df.nlargest(top_n_shark, 'shark_score').reset_index(drop=True)
     
     if 'salary' in df.columns and 'proj_pts' in df.columns:
@@ -170,6 +170,7 @@ def get_player_pool(df, top_n_shark=25, top_n_value=15):
     else:
         pool_value = pd.DataFrame()
 
+    # Concatenate the pools (the originally failing line is now safe)
     final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset=['name']).reset_index(drop=True)
     return final_pool.sort_values(by='shark_score', ascending=False)
 
