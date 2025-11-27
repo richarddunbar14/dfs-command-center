@@ -6,3 +6,4 @@ scikit-learn
 duckduckgo-search
 openpyxl
 requests
+feedparser
