@@ -3,13 +3,20 @@ import pandas as pd
 import numpy as np
 import pulp
 import base64
+from duckduckgo_search import DDGS
+import sys
 import math
 import feedparser
-import sys
-from duckduckgo_search import DDGS # Required for Research Agent
 
 # Increase recursion limit for the pulp solver
 sys.setrecursionlimit(2000)
+
+# Try importing NFL data (optional)
+try:
+    import nfl_data_py as nfl
+    NFL_DATA_AVAILABLE = True
+except ImportError:
+    NFL_DATA_AVAILABLE = False
 
 # ==========================================
 # ⚙️ 1. TITAN AI CONFIGURATION & STYLING
@@ -25,9 +32,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- CRITICAL: GLOBAL SESSION STATE INITIALIZATION (FIXES KeyError) ---
+# --- CRITICAL: GLOBAL SESSION STATE INITIALIZATION ---
 if 'master' not in st.session_state: st.session_state['master'] = pd.DataFrame()
-if 'props' not in st.session_state: st.session_state['props'] = pd.DataFrame() # Changed to DF for simpler handling
+if 'props' not in st.session_state: st.session_state['props'] = []
 
 # ==========================================
 # 🧠 2. THE TITAN BRAIN (LOGIC CLASS)
@@ -81,8 +88,7 @@ class TitanBrain:
 
 def standardize_columns(df):
     """Universal Translator & Cleaner (Safest Version)"""
-    # Fix column names to be Python/Pandas safe
-    df.columns = df.columns.astype(str).str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_').str.replace('$', '').str.replace(',', '').str.replace('%', '')
+    df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_').str.replace('$', '').str.replace(',', '').str.replace('%', '')
     column_map = {
         'name': ['player', 'athlete', 'full_name'], 'proj_pts': ['projection', 'proj', 'fpts', 'median'],
         'ownership': ['own', 'projected_ownership'], 'salary': ['cost', 'sal', 'price'],
@@ -113,12 +119,10 @@ def standardize_columns(df):
 def process_and_analyze(files, sport, spread, total):
     """Handles multi-file ingestion and runs the Titan Brain."""
     master = pd.DataFrame()
-    
     for file in files:
         try:
             if file.name.endswith('.csv'): df = pd.read_csv(file)
             else: df = pd.read_excel(file)
-            
             df = standardize_columns(df)
             
             # --- SAFETY CHECK (Prevents the Array Error) ---
@@ -126,9 +130,8 @@ def process_and_analyze(files, sport, spread, total):
                 if df[col].apply(lambda x: isinstance(x, (list, dict, np.ndarray)) and len(x) > 0).any():
                     df = df.drop(columns=[col]) 
             
-            # Merge Logic: If master is empty, set it. Otherwise, merge on name.
-            if master.empty: 
-                master = df
+            # Merge Logic
+            if master.empty: master = df
             elif 'name' in master.columns and 'name' in df.columns:
                 cols_to_merge = [c for c in df.columns if c not in master.columns or c == 'name']
                 master = master.merge(df[cols_to_merge], on='name', how='left')
@@ -157,16 +160,17 @@ def get_player_pool(df, top_n_shark=25, top_n_value=15):
 
     if df.empty: return pd.DataFrame()
 
-    pool_shark = df.nlargest(top_n_shark, 'shark_score')
+    # FIX: Resetting index before concatenation to prevent InvalidIndexError
+    pool_shark = df.nlargest(top_n_shark, 'shark_score').reset_index(drop=True)
     
     if 'salary' in df.columns and 'proj_pts' in df.columns:
         df['value'] = (df['proj_pts'] / df['salary']) * 1000
         low_sal_thresh = 5000 
-        pool_value = df[df['salary'] <= low_sal_thresh].nlargest(top_n_value, 'value')
+        pool_value = df[df['salary'] <= low_sal_thresh].nlargest(top_n_value, 'value').reset_index(drop=True)
     else:
         pool_value = pd.DataFrame()
 
-    final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset=['name'])
+    final_pool = pd.concat([pool_shark, pool_value]).drop_duplicates(subset=['name']).reset_index(drop=True)
     return final_pool.sort_values(by='shark_score', ascending=False)
 
 # --- OPTIMIZER & LIVE INTEL (Continued) ---
@@ -199,7 +203,6 @@ def optimize_lineup(df, config):
             if use_correlation:
                 for qb_idx in qbs.index:
                     stack_partners = pool[(pool['team'] == pool.loc[qb_idx, 'team']) & (pool['position'].str.contains('WR|TE', na=False))]
-                    # Fix: Ensure correct variable used in sum
                     prob += pulp.lpSum([x[i] for i in stack_partners.index]) >= x[qb_idx]
         
         elif sport == "NBA":
@@ -340,7 +343,7 @@ with tabs[3]:
     if 'prop_line' not in df.columns: st.warning("No Prop Lines found in data.")
     else:
         df['edge'] = ((df['proj_pts'] - df['prop_line']) / df['prop_line']) * 100
-        df['pick'] = np.where(df['edge']>0, 'OVER', 'UNDER')
+        df['pick'] = np.where(df['proj_pts'] > df['prop_line'], 'OVER', 'UNDER')
         
         st.subheader("Prop Edge Analysis")
         st.dataframe(
