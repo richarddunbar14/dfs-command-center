@@ -87,7 +87,7 @@ class TitanBrain:
 # ==========================================
 
 def standardize_columns(df):
-    """Universal Translator & Cleaner (Syntactically Correct Version)"""
+    """Universal Translator & Cleaner (Safest Version)"""
     df.columns = df.columns.str.lower().str.strip().str.replace(' ', '_').str.replace('-', '_').str.replace('$', '').str.replace(',', '').str.replace('%', '')
     column_map = {
         'name': ['player', 'athlete', 'full_name'], 'proj_pts': ['projection', 'proj', 'fpts', 'median'],
@@ -99,7 +99,7 @@ def standardize_columns(df):
     for std, alts in column_map.items():
         for col in df.columns:
             if col not in renamed.values():
-                if any(a in col for a in alts): # SYNTAX FIX: Ensure closing parenthesis is present here.
+                if any(a in col for a in alts):
                     renamed[col] = std
                     break
     df = df.rename(columns=renamed)
@@ -117,6 +117,7 @@ def standardize_columns(df):
     return df
 
 def process_and_analyze(files, sport, spread, total):
+    """Handles multi-file ingestion and runs the Titan Brain."""
     master = pd.DataFrame()
     for file in files:
         try:
@@ -137,7 +138,7 @@ def process_and_analyze(files, sport, spread, total):
                 
         except Exception as e: st.error(f"Error loading file: {e}")
             
-    # RUN SHARK LOGIC only if possible
+    # RUN SHARK LOGIC only if essential columns are present
     if 'proj_pts' in master.columns and 'ownership' in master.columns:
         master['rank_proj'] = master['proj_pts'].rank(ascending=False)
         master['rank_own'] = master['ownership'].rank(ascending=False)
@@ -152,7 +153,15 @@ def process_and_analyze(files, sport, spread, total):
 def get_player_pool(df, top_n_shark=25, top_n_value=15):
     """Generates the final player pool based on multiple criteria."""
     
-    if df.empty or 'shark_score' not in df.columns: return pd.DataFrame()
+    # --- CRITICAL FIX FOR KEYERROR ---
+    # Ensure columns exist before trying to access them for display/sorting
+    if 'shark_score' not in df.columns: 
+        df['shark_score'] = 50.0 
+    if 'reasoning' not in df.columns:
+        df['reasoning'] = "N/A - Run Titan Brain First"
+    # --- END FIX ---
+
+    if df.empty: return pd.DataFrame()
 
     pool_shark = df.nlargest(top_n_shark, 'shark_score')
     
@@ -175,8 +184,7 @@ def optimize_lineup(df, config):
     )
     
     pool = df[(df[target_col] > 0) & (df['salary'] > 0)].reset_index(drop=True)
-    roster_size = 9 # Default for NFL/FD/Yahoo
-    
+    roster_size = 9 if sport=="NFL" else 8
     valid_lineups = []
     
     for _ in range(num_lineups):
@@ -185,41 +193,24 @@ def optimize_lineup(df, config):
         
         prob += pulp.lpSum([pool.loc[i, target_col] * x[i] for i in pool.index])
         prob += pulp.lpSum([pool.loc[i, 'salary'] * x[i] for i in pool.index]) <= cap
+        prob += pulp.lpSum([x[i] for i in pool.index]) == roster_size
         
-        # --- POSITION LOGIC (STRICTLY ENFORCED) ---
+        # Position Logic (NFL Example)
         if sport == "NFL":
-            roster_size = 9
             qbs = pool[pool['position'].str.contains('QB', na=False)]
             dsts = pool[pool['position'].str.contains('DST|DEF', na=False)]
-            rbs = pool[pool['position'].str.contains('RB', na=False)]
-            wrs = pool[pool['position'].str.contains('WR', na=False)]
-            tes = pool[pool['position'].str.contains('TE', na=False)]
-            
-            prob += pulp.lpSum([x[i] for i in df.index]) == roster_size
             prob += pulp.lpSum([x[i] for i in qbs.index]) == 1
             prob += pulp.lpSum([x[i] for i in dsts.index]) == 1
-            prob += pulp.lpSum([x[i] for i in rbs.index]) >= 2
-            prob += pulp.lpSum([x[i] for i in wrs.index]) >= 3
-            prob += pulp.lpSum([x[i] for i in tes.index]) >= 1
             
-            if use_correlation: # AUTO-STACKING
+            if use_correlation:
                 for qb_idx in qbs.index:
-                    team = pool.loc[qb_idx, 'team']
-                    stack_partners = pool[(pool['team'] == team) & (pool['position'].str.contains('WR|TE', na=False))]
-                    prob += pulp.lpSum([x[i] for i in stack_partners.index]) >= 1
+                    stack_partners = pool[(pool['team'] == pool.loc[qb_idx, 'team']) & (pool['position'].str.contains('WR|TE', na=False))]
+                    prob += pulp.lpSum([x[i] for x[i] in stack_partners.index]) >= x[qb_idx]
         
         elif sport == "NBA":
-            # FanDuel NBA (Strict Example: 2PG, 2SG, 2SF, 2PF, 1C)
-            if site == "FanDuel": roster_size = 9
-            else: roster_size = 8 # DraftKings
+             cs = pool[pool['position'].str.contains('C', na=False)]
+             prob += pulp.lpSum([x[i] for i in cs.index]) >= 1
             
-            pgs = pool[pool['position'].str.contains('PG', na=False)]
-            cs = pool[pool['position'].str.contains('C', na=False)]
-            
-            prob += pulp.lpSum([x[i] for i in df.index]) == roster_size
-            prob += pulp.lpSum([x[i] for i in pgs.index]) >= 1
-            prob += pulp.lpSum([x[i] for i in cs.index]) >= 1
-
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
         if prob.status == pulp.LpStatusOptimal:
@@ -241,6 +232,8 @@ def kelly_criterion(bankroll, odds_decimal, win_probability, multiplier=0.5):
 def fetch_rotowire_news(sport):
     urls = {"NFL": "https://www.rotowire.com/rss/news.htm?sport=nfl", "NBA": "https://www.rotowire.com/rss/news.htm?sport=nba"}
     try:
+        # Note: This requires the 'requests' library to be installed correctly.
+        # Simple fetch with feedparser (no requests needed for basic RSS)
         feed = feedparser.parse(urls.get(sport, urls['NFL']))
         return [{"title": x.title, "summary": x.summary} for x in feed.entries[:5]]
     except: return []
@@ -250,9 +243,7 @@ def get_csv_download(df):
     b64 = base64.b64encode(csv.encode()).decode()
     return f'<a href="data:file/csv;base64,{b64}" download="titan_lineups.csv" class="stButton">📥 Download CSV</a>'
 
-# ==========================================
-# 🖥️ 6. UI DASHBOARD
-# ==========================================
+# --- UI DASHBOARD ---
 
 st.sidebar.title("🦁 TITAN APEX CORE")
 sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "NHL"], index=0)
