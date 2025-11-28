@@ -8,14 +8,19 @@ import sqlite3
 import base64
 import requests
 import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime
-from duckduckgo_search import DDGS
+
+# 🛡️ SAFE IMPORT
+try:
+    from duckduckgo_search import DDGS
+    HAS_AI = True
+except ImportError:
+    HAS_AI = False
 
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V31.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V33.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -26,7 +31,6 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
     .value-badge { background-color: #00e676; color: black; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
-    .sharp-badge { background-color: #d500f9; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -45,29 +49,7 @@ class MultiVerseGateway:
         self.headers = {"X-RapidAPI-Key": self.key, "Content-Type": "application/json"}
 
     def fetch_data(self, sport):
-        data = []
-        try:
-            # --- NBA ---
-            if sport == 'NBA':
-                url = "https://api-nba-v1.p.rapidapi.com/games"
-                self.headers["X-RapidAPI-Host"] = "api-nba-v1.p.rapidapi.com"
-                params = {"date": datetime.now().strftime("%Y-%m-%d")}
-                res = requests.get(url, headers=self.headers, params=params)
-                if res.status_code == 200:
-                    for g in res.json().get('response', []):
-                        matchup = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
-                        data.append({'game_info': matchup, 'sport': 'NBA'})
-            # --- NFL ---
-            elif sport == 'NFL':
-                url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
-                self.headers["X-RapidAPI-Host"] = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com"
-                params = {"gameDate": datetime.now().strftime("%Y%m%d")}
-                res = requests.get(url, headers=self.headers, params=params)
-                if res.status_code == 200:
-                    for g in res.json().get('body', []):
-                        data.append({'game_info': g.get('gameID'), 'sport': 'NFL'})
-        except Exception as e: pass
-        return pd.DataFrame(data)
+        return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
 def cached_api_fetch(sport, key):
@@ -103,19 +85,17 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN (ANALYSIS ENGINE)
+# 🧠 4. TITAN BRAIN
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
         self.bankroll = bankroll
 
     def apply_strategic_boosts(self, row, sport):
-        # CRITICAL FIX: Safe Get
         proj = row.get('projection', 0.0)
         notes = []
         
         try:
-            # 1. HOT HAND
             if row.get('l3_fpts', 0) > 0 and row.get('avg_fpts', 0) > 0:
                 diff_pct = (row['l3_fpts'] - row['avg_fpts']) / row['avg_fpts']
                 if diff_pct > 0.20:
@@ -125,7 +105,6 @@ class TitanBrain:
                     proj *= 0.95
                     notes.append("❄️ Cold Streak")
 
-            # 2. WEATHER
             if sport in ['NFL', 'MLB'] and 'wind' in row and 'precip' in row:
                 if row['wind'] > 15 or row['precip'] > 50:
                     pos = str(row.get('position', ''))
@@ -136,7 +115,6 @@ class TitanBrain:
                         proj *= 1.05 
                         notes.append("🛡️ Weather Boost")
 
-            # 3. MATCHUP
             if 'opp_rank' in row and row['opp_rank'] > 0:
                 if row['opp_rank'] >= 25: 
                     proj *= 1.08
@@ -145,8 +123,7 @@ class TitanBrain:
                     proj *= 0.92
                     notes.append("🔴 Tough Matchup")
                 
-        except Exception:
-            pass # Fail gracefully
+        except Exception: pass
 
         return proj, " | ".join(notes)
 
@@ -210,7 +187,8 @@ class TitanBrain:
         avg_proj = lineup_df['projection'].mean()
         msg.append(f"📊 **Proj:** {avg_proj:.1f}")
         
-        if slate_size <= 4 and len(heavy_stack) < 1: msg.append("⚠️ Small Slate needs correlation!")
+        salary_used = lineup_df['salary'].sum()
+        msg.append(f"💰 **Cap:** ${salary_used:,}")
         
         return " | ".join(msg)
 
@@ -234,9 +212,11 @@ class DataRefinery:
         if 'RECEIVER' in p: return 'WR'
         if 'TIGHT' in p: return 'TE'
         if 'DEF' in p or 'DST' in p: return 'DST'
-        if 'GUARD' in p or 'G/UTIL' in p: return 'G' # CBB Fix
-        if 'FORWARD' in p or 'F/UTIL' in p: return 'F' # CBB Fix
+        if 'GUARD' in p: return 'G'
+        if 'FORWARD' in p: return 'F'
         if 'CENTER' in p: return 'C'
+        if 'G/UTIL' in p: return 'G'
+        if 'F/UTIL' in p: return 'F'
         if 'LEFT WING' in p: return 'LW'
         if 'RIGHT WING' in p: return 'RW'
         if 'GOALIE' in p: return 'G'
@@ -253,9 +233,10 @@ class DataRefinery:
             'salary': ['SAL', 'SALARY', 'CAP', 'COST', 'PRICE'],
             'position': ['POS', 'POSITION', 'ROSTER POSITION', 'SLOT'],
             'team': ['TEAM', 'TM', 'SQUAD'],
+            'opp': ['OPP', 'OPPONENT', 'VS'], # Add dedicated opponent column
             'prop_line': ['LINE', 'PROP', 'PLAYER PROP', 'STRIKE', 'TOTAL'], 
             'market': ['MARKET NAME', 'MARKET', 'STAT'],
-            'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
+            'game_info': ['GAME INFO', 'GAME', 'MATCHUP'],
             'date': ['DATE', 'GAME DATE'],
             'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
             'status': ['STATUS', 'INJURY', 'AVAILABILITY'], 
@@ -305,11 +286,21 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
+        # 🟢 CONSTRUCT GAME INFO IF MISSING (Fixes "All Games" Bug)
+        if 'game_info' not in std.columns:
+            if 'team' in std.columns and 'opp' in std.columns:
+                # Build "BUF vs KC" string
+                std['game_info'] = std['team'] + ' vs ' + std['opp']
+                if 'time' in std.columns:
+                     std['game_info'] += ' (' + std['time'].astype(str) + ')'
+            else:
+                std['game_info'] = 'All Games'
+        
         if 'status' not in std.columns: std['status'] = 'Active'
         else: std['status'].fillna('Active', inplace=True)
         
         defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
-                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'rst_own':10.0,
+                   'market':'Standard', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'rst_own':10.0,
                    'l3_fpts':0.0, 'avg_fpts':0.0, 'opp_rank':16.0, 'wind':0.0, 'precip':0.0, 'is_home':'No'}
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
@@ -329,7 +320,6 @@ class DataRefinery:
         else:
             std['spike_score'] = 0.0 
         
-        # Smart Tagging
         if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
             std['prizepicks_line'] = std['prop_line']
         elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
@@ -370,17 +360,14 @@ class DataRefinery:
 # ==========================================
 def run_web_scout(sport):
     intel = {}
-    try:
-        with DDGS() as ddgs:
-            queries = [
-                f"{sport} dfs winning strategy matchups to exploit this week",
-                f"{sport} player prop sleepers and values today",
-                f"{sport} dfs injury news impact today"
-            ]
-            for q in queries:
-                for r in list(ddgs.text(q, max_results=3)):
-                    intel[(r['title'] + " " + r['body']).lower()] = 1
-    except: pass
+    if HAS_AI:
+        try:
+            with DDGS() as ddgs:
+                queries = [f"{sport} dfs winning strategy matchups today", f"{sport} player prop sleepers"]
+                for q in queries:
+                    for r in list(ddgs.text(q, max_results=3)):
+                        intel[(r['title'] + " " + r['body']).lower()] = 1
+        except: pass
     return intel
 
 # ==========================================
@@ -392,7 +379,7 @@ def get_roster_rules(sport, site, mode):
     if site == 'DK': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
     elif site == 'Yahoo': rules['cap'] = 200
-    else: rules['cap'] = 999999 # Pickem sites
+    else: rules['cap'] = 999999
     
     if mode == 'Showdown':
         if site == 'DK':
@@ -427,11 +414,10 @@ def get_roster_rules(sport, site, mode):
             rules['constraints'] = [('C', 2, 3), ('W', 3, 4), ('D', 2, 3), ('G', 1, 1)]
     elif sport == 'PGA':
         rules['size'] = 6
-    # 🏀 CBB ADDED
     elif sport == 'CBB':
         if site == 'DK':
             rules['size'] = 8
-            rules['constraints'] = [('G', 3, 5), ('F', 3, 5)] 
+            rules['constraints'] = [('G', 3, 5), ('F', 3, 5)]
 
     if rules['size'] == 0: rules['size'] = 6
     return rules
@@ -451,27 +437,24 @@ def optimize_lineup(df, config):
         return None
 
     brain = TitanBrain(0)
-    pool[['projection', 'notes']] = pool.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, target_sport)), axis=1)
+    try:
+        applied = pool.apply(lambda row: brain.apply_strategic_boosts(row, target_sport), axis=1, result_type='expand')
+        pool['projection'] = applied[0]
+        pool['notes'] = applied[1]
+    except: pass
 
     unique_games = pool['game_info'].nunique()
     is_small_slate = unique_games <= 4
     st.info(f"📊 **Slate Context:** {unique_games} Games. Strategy: {'Aggressive' if is_small_slate else 'Standard'}")
 
-    if 'tm_score' in pool.columns and config['game_script']:
-        pool['projection'] = np.where(pool['tm_score'] > 24, pool['projection'] * 1.05, pool['projection'])
-
-    if 'rst_own' in pool.columns and config['chalk_fade'] > 0:
-        pool['projection'] = np.where(pool['rst_own'] > 25, pool['projection'] * (1 - config['chalk_fade']/100.0), pool['projection'])
-
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
-    
     if config['positions']:
         pool = pool[pool['position'].isin(config['positions'])].reset_index(drop=True)
-
-    pool = pool[pool['projection'] > 0].reset_index(drop=True)
-    if config['bans']: pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
+    if config['bans']: 
+        pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
     
+    # SHOWDOWN LOGIC FIX
     if config['mode'] == 'Showdown':
         flex = pool.copy(); flex['pos_id'] = 'FLEX'
         cpt = pool.copy(); cpt['pos_id'] = 'CPT'
@@ -555,9 +538,9 @@ def optimize_slips(df, config):
     brain = TitanBrain(0)
     
     try:
-        applied = pool.apply(lambda row: brain.apply_strategic_boosts(row, target_sport), axis=1)
-        pool['smart_projection'] = applied.apply(lambda x: x[0])
-        pool['notes'] = applied.apply(lambda x: x[1])
+        applied = pool.apply(lambda row: brain.apply_strategic_boosts(row, target_sport), axis=1, result_type='expand')
+        pool['smart_projection'] = applied[0]
+        pool['notes'] = applied[1]
     except:
         pool['smart_projection'] = pool['projection']
         pool['notes'] = ""
@@ -569,7 +552,6 @@ def optimize_slips(df, config):
     def calc_score(row):
         line = row[line_col] if row[line_col] > 0 else row['prop_line']
         proj = row['smart_projection']
-        
         if line <= 0 or proj <= 0: return 0
         edge = abs(proj - line) / line
         score = edge * 100
@@ -595,7 +577,7 @@ def optimize_slips(df, config):
             
             # 🧩 CORRELATION BOOST
             if config['correlation'] and row['team'] in slip_teams:
-                 row['opt_score'] *= 1.1 
+                 row['opt_score'] *= 1.1
             
             line = row[line_col] if row[line_col] > 0 else row['prop_line']
             proj = row['smart_projection']
@@ -621,11 +603,11 @@ def get_csv_download(df):
     return df.to_csv(index=False).encode('utf-8')
 
 # ==========================================
-# 🖥️ 9. DASHBOARD (SPLIT UI)
+# 🖥️ 9. DASHBOARD (FINAL)
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 31.0 (The Architect)")
+st.sidebar.caption("Hydra Edition 33.0 (The Constructor)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -636,7 +618,7 @@ st.sidebar.metric("🏦 Bankroll", f"${current_bank:,.2f}")
 sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2", "CBB"])
 site = st.sidebar.selectbox("Site/Book", ["DK", "FD", "Yahoo", "PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
 
-tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay", "6. 🧩 Prop Opt", "7. ⚖️ Arbitrage", "8. 🎬 Scenarios", "9. 👁️ Vision"])
+tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay", "6. 🧩 Prop Opt"])
 
 # --- TAB 1: DATA ---
 with tabs[0]:
@@ -782,10 +764,11 @@ with tabs[3]:
         
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
         
+        # SAFE APPLY FOR PROPS
         try:
-            applied = active.apply(lambda row: brain.apply_strategic_boosts(row, sport), axis=1)
-            active['smart_projection'] = applied.apply(lambda x: x[0])
-            active['notes'] = applied.apply(lambda x: x[1])
+            applied = active.apply(lambda row: brain.apply_strategic_boosts(row, sport), axis=1, result_type='expand')
+            active['smart_projection'] = applied[0]
+            active['notes'] = applied[1]
         except:
             active['smart_projection'] = active['projection']
             active['notes'] = ""
@@ -852,6 +835,7 @@ with tabs[5]:
     st.markdown("### 🧩 Prop Slip Optimizer")
     pool = st.session_state['prop_pool']
     
+    # 🟢 STATUS CHECK
     valid_props_count = len(pool) if not pool.empty else 0
     st.caption(f"Status: {valid_props_count} Valid Props Available")
     
@@ -887,73 +871,3 @@ with tabs[5]:
                     st.divider()
             else:
                 st.error("Could not generate valid slips. Check data pool.")
-
-# --- TAB 7: ARBITRAGE HUNTER ---
-with tabs[6]:
-    st.markdown("### ⚖️ Arbitrage / Middle Hunter")
-    pool = st.session_state['prop_pool']
-    if pool.empty: st.warning("Load Props first.")
-    else:
-        st.caption("Scanning for line discrepancies > 1.0...")
-        arbs = []
-        for idx, row in pool.iterrows():
-            lines = {
-                'PrizePicks': row.get('prizepicks_line', 0),
-                'Underdog': row.get('underdog_line', 0),
-                'Sleeper': row.get('sleeper_line', 0)
-            }
-            valid_lines = {k: v for k, v in lines.items() if v > 0}
-            if len(valid_lines) > 1:
-                min_val = min(valid_lines.values())
-                max_val = max(valid_lines.values())
-                if (max_val - min_val) >= 1.0:
-                    arbs.append({
-                        'Player': row['name'],
-                        'Market': row['market'],
-                        'Min Line': min_val,
-                        'Max Line': max_val,
-                        'Gap': max_val - min_val,
-                        'Strategy': f"Bet OVER {min_val} / UNDER {max_val}"
-                    })
-        
-        if arbs:
-            st.success(f"Found {len(arbs)} Arbitrage Opportunities!")
-            st.dataframe(pd.DataFrame(arbs))
-        else:
-            st.info("No arbitrage opportunities found in current pool.")
-
-# --- TAB 8: SCENARIO BUILDER ---
-with tabs[7]:
-    st.markdown("### 🎬 Scenario Builder")
-    pool = st.session_state['dfs_pool']
-    if pool.empty: st.warning("Load DFS Pool first.")
-    else:
-        teams = sorted(pool['team'].unique())
-        selected_team = st.selectbox("Select Winning Team:", teams)
-        margin = st.slider("Predicted Margin of Victory", 1, 30, 7)
-        
-        if st.button("Apply Scenario"):
-            pool.loc[pool['team'] == selected_team, 'projection'] *= 1.05
-            st.success(f"Applied scenario: {selected_team} wins by {margin}+ points. Projections updated.")
-            st.dataframe(pool[pool['team'] == selected_team].head())
-
-# --- TAB 9: VISION (VISUALS) ---
-with tabs[8]:
-    st.markdown("### 👁️ Titan Vision")
-    
-    viz_choice = st.radio("Visualize:", ["DFS Value", "Prop Edge"], horizontal=True)
-    
-    if viz_choice == "DFS Value":
-        if not st.session_state['dfs_pool'].empty:
-            df = st.session_state['dfs_pool']
-            fig = px.scatter(df, x="salary", y="projection", color="position", hover_data=["name"], title="Salary vs Projection (Value Finder)")
-            st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("Load DFS Data")
-        
-    elif viz_choice == "Prop Edge":
-        if not st.session_state['prop_pool'].empty:
-            df = st.session_state['prop_pool'].copy()
-            df['edge'] = (df['projection'] - df['prop_line']).abs() / df['prop_line']
-            fig = px.scatter(df, x="edge", y="projection", color="market", hover_data=["name", "prop_line"], title="Edge Magnitude vs Projection")
-            st.plotly_chart(fig, use_container_width=True)
-        else: st.warning("Load Prop Data")
