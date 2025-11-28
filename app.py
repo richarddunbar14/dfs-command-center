@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V20.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V23.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -35,7 +35,7 @@ if 'api_log' not in st.session_state: st.session_state['api_log'] = []
 if 'ai_intel' not in st.session_state: st.session_state['ai_intel'] = {}
 
 # ==========================================
-# 📡 2. MULTI-VERSE API ROUTER (RESTORED)
+# 📡 2. MULTI-VERSE API ROUTER (LIVE)
 # ==========================================
 class MultiVerseGateway:
     def __init__(self, api_key):
@@ -54,9 +54,10 @@ class MultiVerseGateway:
                 if res.status_code == 200:
                     games = res.json().get('response', [])
                     for g in games:
-                        game_str = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
-                        data.append({'game_info': game_str, 'sport': 'NBA'})
-
+                        # Extract Game Info for matching
+                        matchup = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
+                        data.append({'game_info': matchup, 'sport': 'NBA'})
+            
             # --- NFL (Tank01) ---
             elif sport == 'NFL':
                 url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
@@ -67,12 +68,14 @@ class MultiVerseGateway:
                     games = res.json().get('body', [])
                     for g in games:
                         data.append({'game_info': g.get('gameID'), 'sport': 'NFL'})
-            
-            # --- MLB, NHL, etc. (Placeholders for extensibility) ---
-            # You can add more endpoints here following the same pattern
+
+            # --- OTHER SPORTS (Placeholders for future expansion) ---
+            elif sport in ['MLB', 'NHL', 'PGA']:
+                # Just return empty for now to prevent errors, allows manual CSV upload
+                pass
 
         except Exception as e:
-            st.error(f"API Error: {e}")
+            st.error(f"API Connection Error: {e}")
             
         return pd.DataFrame(data)
 
@@ -110,7 +113,7 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN
+# 🧠 4. TITAN BRAIN (GRANDMASTER LOGIC)
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
@@ -120,7 +123,7 @@ class TitanBrain:
         proj = row['projection']
         notes = []
         
-        # 1. HOT HAND
+        # 1. HOT HAND FORM
         if row.get('l3_fpts', 0) > 0 and row.get('avg_fpts', 0) > 0:
             diff_pct = (row['l3_fpts'] - row['avg_fpts']) / row['avg_fpts']
             if diff_pct > 0.20:
@@ -130,7 +133,7 @@ class TitanBrain:
                 proj *= 0.95
                 notes.append("❄️ Cold Streak")
 
-        # 2. WEATHER
+        # 2. WEATHER ENGINE
         if sport in ['NFL', 'MLB'] and 'wind' in row and 'precip' in row:
             if row['wind'] > 15 or row['precip'] > 50:
                 pos = str(row['position'])
@@ -141,7 +144,7 @@ class TitanBrain:
                     proj *= 1.05 
                     notes.append("🛡️ Weather Boost")
 
-        # 3. MATCHUP
+        # 3. MATCHUP EXPLOITER
         if 'opp_rank' in row and row['opp_rank'] > 0:
             if row['opp_rank'] >= 25: 
                 proj *= 1.08
@@ -159,6 +162,8 @@ class TitanBrain:
     def calculate_prop_edge(self, row, line_col='prop_line'):
         line = row.get(line_col, 0)
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
+        
+        # Use SMART Projection
         proj = row.get('smart_projection', row.get('projection', 0))
         
         if line <= 0 or proj <= 0: return 0, "No Data", 0.0, "Insufficient Data"
@@ -200,7 +205,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY
+# 📂 5. DATA REFINERY (CRASH PROOF)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -222,6 +227,10 @@ class DataRefinery:
         if 'GUARD' in p: return 'G'
         if 'FORWARD' in p: return 'F'
         if 'CENTER' in p: return 'C'
+        # NHL Specifics
+        if 'LEFT WING' in p: return 'LW'
+        if 'RIGHT WING' in p: return 'RW'
+        if 'GOALIE' in p: return 'G'
         return p
 
     @staticmethod
@@ -287,7 +296,6 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
-        # Fill missing status to avoid accidental filtering
         if 'status' not in std.columns: std['status'] = 'Active'
         else: std['status'].fillna('Active', inplace=True)
         
@@ -303,10 +311,16 @@ class DataRefinery:
         if 'salary' in std.columns and 'projection' in std.columns:
             std['value_score'] = np.where(std['salary'] > 0, (std['projection'] / std['salary']) * 1000, 0)
         
+        # SAFETY CHECK FOR FACTORS
         factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
-        for f in factors:
-            if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
-        std['spike_score'] = std[factors].mean(axis=1).fillna(0)
+        valid_factors = [f for f in factors if f in std.columns]
+        
+        if valid_factors:
+            for f in valid_factors:
+                std[f] = pd.to_numeric(std[f], errors='coerce')
+            std['spike_score'] = std[valid_factors].mean(axis=1).fillna(0)
+        else:
+            std['spike_score'] = 0.0 
         
         # SMART TAGGING
         if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
@@ -363,17 +377,19 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (BULLETPROOF)
+# 🏭 7. OPTIMIZER (ALL SPORTS)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
     
+    # SITE CAPS
     if site in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
         rules['cap'] = 999999
     elif site == 'DK': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
     elif site == 'Yahoo': rules['cap'] = 200
     
+    # SHOWDOWN
     if mode == 'Showdown':
         if site == 'DK':
             rules['size'] = 6
@@ -383,6 +399,7 @@ def get_roster_rules(sport, site, mode):
             rules['constraints'].append(('MVP', 1, 1))
         return rules
 
+    # NFL
     if sport == 'NFL':
         if site == 'DK':
             rules['size'] = 9
@@ -391,6 +408,7 @@ def get_roster_rules(sport, site, mode):
             rules['size'] = 9
             rules['constraints'] = [('QB', 1, 1), ('DST', 1, 1), ('RB', 2, 3), ('WR', 3, 4), ('TE', 1, 2)]
             
+    # NBA
     elif sport == 'NBA':
         if site == 'DK':
             rules['size'] = 8
@@ -399,6 +417,23 @@ def get_roster_rules(sport, site, mode):
             rules['size'] = 9
             rules['constraints'] = [('PG', 2, 2), ('SG', 2, 2), ('SF', 2, 2), ('PF', 2, 2), ('C', 1, 1)]
 
+    # MLB
+    elif sport == 'MLB':
+        if site == 'DK':
+            rules['size'] = 10
+            rules['constraints'] = [('P', 2, 2), ('C', 0, 1), ('1B', 0, 1), ('2B', 0, 1), ('3B', 0, 1), ('SS', 0, 1), ('OF', 3, 3)]
+            
+    # NHL
+    elif sport == 'NHL':
+        if site == 'DK':
+            rules['size'] = 9
+            rules['constraints'] = [('C', 2, 3), ('W', 3, 4), ('D', 2, 3), ('G', 1, 1)]
+            
+    # PGA
+    elif sport == 'PGA':
+        rules['size'] = 6
+        # No specific constraints, just 6 golfers
+
     if rules['size'] == 0: rules['size'] = 6
     return rules
 
@@ -406,25 +441,24 @@ def optimize_lineup(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
-    # 🟢 CRITICAL FIX: Ensure only valid salaries exist for DFS
+    # FILTER 0 SALARY FOR DFS
     if config['site'] not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
         pool = pool[pool['salary'] > 0]
     
-    # 🩹 INJURY FILTER
     if 'status' in pool.columns:
         pool = pool[~pool['status'].str.contains('Out|IR|NA|Doubtful', case=False, na=False)]
     
     if pool.empty:
-        st.error(f"❌ No valid DFS players found for {target_sport}. Please upload DFS CSV.")
+        st.error(f"❌ No valid DFS players found for {target_sport}. Please use the **Left Uploader**.")
         return None
 
-    # APPLY BRAIN BOOSTS
+    # APPLY BRAIN
     brain = TitanBrain(0)
     pool[['projection', 'notes']] = pool.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, target_sport)), axis=1)
 
     unique_games = pool['game_info'].nunique()
     is_small_slate = unique_games <= 4
-    st.info(f"📊 **Slate Context:** {unique_games} Games. Strategy: {'Aggressive/Correlation' if is_small_slate else 'Standard'}")
+    st.info(f"📊 **Slate Context:** {unique_games} Games. Strategy: {'Aggressive' if is_small_slate else 'Standard'}")
 
     if 'tm_score' in pool.columns and config['game_script']:
         pool['projection'] = np.where(pool['tm_score'] > 24, pool['projection'] * 1.05, pool['projection'])
@@ -441,7 +475,6 @@ def optimize_lineup(df, config):
     pool = pool[pool['projection'] > 0].reset_index(drop=True)
     if config['bans']: pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
     
-    # 🟢 SHOWDOWN FIX: Prepare pool BEFORE iterating
     if config['mode'] == 'Showdown':
         flex = pool.copy(); flex['pos_id'] = 'FLEX'
         cpt = pool.copy(); cpt['pos_id'] = 'CPT'
@@ -454,19 +487,16 @@ def optimize_lineup(df, config):
 
     rules = get_roster_rules(config['sport'], config['site'], config['mode'])
     lineups = []
-    
-    # 🟢 RESET EXPOSURE TRACKER FOR NEW POOL
     player_exposure = {i: 0 for i in pool.index}
     
     def solve_lp(relax_stacking=False):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
-        # 🟢 SIMULATION FIX: Allow Negative Noise (Normal Distribution)
         sim_noise = 0.5
         if 'factor_hit_rate' in pool.columns:
             sim_noise = 1.0 - (pool['factor_hit_rate'].fillna(50) / 100.0)
-        randomness = np.random.normal(0, sim_noise, len(pool)) # Can be negative now
+        randomness = np.random.normal(0, sim_noise, len(pool))
         
         prob += pulp.lpSum([(pool.loc[p, 'projection'] + randomness[p]) * x[p] for p in pool.index])
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
@@ -489,7 +519,6 @@ def optimize_lineup(df, config):
                 teammates = pool[(pool['team'] == team) & (pool['pos_id'].isin(['WR', 'TE']))].index
                 if not teammates.empty:
                     prob += pulp.lpSum([x[t] for t in teammates]) >= x[qb]
-                    if is_small_slate: prob += pulp.lpSum([x[t] for t in teammates]) >= 2 * x[qb]
 
         if config['max_exposure'] < 100:
             max_lineups = max(1, int(config['count'] * (config['max_exposure'] / 100.0)))
@@ -501,10 +530,7 @@ def optimize_lineup(df, config):
 
     for i in range(config['count']):
         prob, x = solve_lp(relax_stacking=False)
-        
-        if prob.status != 1:
-            prob, x = solve_lp(relax_stacking=True)
-        
+        if prob.status != 1: prob, x = solve_lp(relax_stacking=True)
         if prob.status == 1:
             sel = [p for p in pool.index if x[p].varValue == 1]
             lu = pool.loc[sel].copy()
@@ -515,7 +541,7 @@ def optimize_lineup(df, config):
     return pd.concat(lineups) if lineups else None
 
 # ==========================================
-# 🧩 8. PROP OPTIMIZER (WITH SHARP LOGIC)
+# 🧩 8. PROP OPTIMIZER
 # ==========================================
 def optimize_slips(df, config):
     target_sport = config['sport'].strip().upper()
@@ -528,7 +554,9 @@ def optimize_slips(df, config):
     elif config['book'] == 'DraftKings Pick6': line_col = 'pick6_line'
     
     brain = TitanBrain(0)
-    pool[['smart_projection', 'notes']] = pool.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, target_sport)), axis=1)
+    applied = pool.apply(lambda row: brain.apply_strategic_boosts(row, target_sport), axis=1)
+    pool['smart_projection'] = applied.apply(lambda x: x[0])
+    pool['notes'] = applied.apply(lambda x: x[1])
     
     def calc_score(row):
         line = row.get(line_col, 0)
@@ -584,7 +612,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 20.0 (The Completed System)")
+st.sidebar.caption("Hydra Edition 23.0 (Complete)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -615,11 +643,12 @@ with tabs[0]:
                     st.success("Sync Complete")
     
     st.divider()
-    c1, c2 = st.columns(2)
     
+    c1, c2 = st.columns(2)
     with c1:
-        st.info("🏰 **DFS UPLOAD (DraftKings/FanDuel)**")
-        dfs_files = st.file_uploader("Upload DFS CSVs (Must have Salaries)", accept_multiple_files=True, key="dfs_up")
+        st.success("🏰 **DFS UPLOAD (Left Lane)**")
+        st.caption("DraftKings / FanDuel CSVs with Salaries")
+        dfs_files = st.file_uploader("Upload DFS CSVs", accept_multiple_files=True, key="dfs_up")
         if st.button("🧬 Load DFS Data"):
             if dfs_files:
                 ref = DataRefinery()
@@ -634,7 +663,8 @@ with tabs[0]:
                 st.success(f"Loaded {len(new_data)} DFS Players.")
 
     with c2:
-        st.info("🚀 **PROP UPLOAD (PrizePicks/Underdog)**")
+        st.info("🚀 **PROP UPLOAD (Right Lane)**")
+        st.caption("PrizePicks / Underdog / Sleeper CSVs")
         prop_source = st.selectbox("Prop Source:", ["PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"], key="prop_src")
         prop_files = st.file_uploader(f"Upload {prop_source} CSVs", accept_multiple_files=True, key="prop_up")
         if st.button("🧬 Load Prop Data"):
@@ -736,7 +766,12 @@ with tabs[3]:
         st.info(f"🔎 Analyzing for **{site}**. Using column: `{target_line_col}`.")
         
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
-        active[['smart_projection', 'notes']] = active.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, sport)), axis=1)
+        
+        # ROBUST APPLY FOR PROPS
+        applied = active.apply(lambda row: brain.apply_strategic_boosts(row, sport), axis=1)
+        active['smart_projection'] = applied.apply(lambda x: x[0])
+        active['notes'] = applied.apply(lambda x: x[1])
+        
         active['pick'] = np.where(active['smart_projection'] > active['final_line'], "OVER", "UNDER")
         
         res = active.apply(lambda x: brain.calculate_prop_edge(x, 'final_line'), axis=1, result_type='expand')
