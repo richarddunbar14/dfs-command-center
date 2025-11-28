@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: MULTI-VERSE", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V8.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -97,7 +97,7 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN (ANALYSIS ENGINE)
+# 🧠 4. TITAN BRAIN
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
@@ -105,7 +105,9 @@ class TitanBrain:
 
     def calculate_prop_edge(self, row, line_col='prop_line'):
         line = row.get(line_col, 0)
+        # Use fallback if specific line is missing
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
+        
         proj = row.get('projection', 0)
         
         if line <= 0 or proj <= 0: return 0, "No Data", 0.0, "Insufficient Data"
@@ -122,7 +124,6 @@ class TitanBrain:
         elif units > 1.5: rating = "🟢 NUCLEAR"
         elif units > 0.5: rating = "🟡 KINETIC"
         
-        # LOGIC EXPLANATION
         reasoning = []
         if edge_raw > 0.10: reasoning.append(f"🟢 High Edge ({edge_raw*100:.1f}%)")
         if row.get('factor_hit_rate', 0) > 55: reasoning.append(f"🔥 Hot Trend ({row['factor_hit_rate']}%)")
@@ -137,25 +138,20 @@ class TitanBrain:
         stacks = lineup_df['team'].value_counts()
         heavy_stack = stacks[stacks >= 2].index.tolist()
         
-        if heavy_stack:
-            msg.append(f"🔗 **Correlation Detected:** Stacking {', '.join(heavy_stack)}. Good for GPP upside.")
-        else:
-            msg.append(f"🧩 **Scatter Build:** No major stacks found. Offers floor safety.")
+        if heavy_stack: msg.append(f"🔗 **Correlation:** Stacking {', '.join(heavy_stack)}.")
+        else: msg.append(f"🧩 **Structure:** Scatter/Floor Build.")
             
         avg_proj = lineup_df['projection'].mean()
-        msg.append(f"📊 **Avg Proj:** {avg_proj:.1f} pts.")
+        msg.append(f"📊 **Avg Proj:** {avg_proj:.1f}")
         
         if 'spike_score' in lineup_df.columns:
             avg_spike = lineup_df['spike_score'].mean()
-            if avg_spike > 70: 
-                msg.append(f"🔥 **Volatile/High Upside:** High average Spike Score ({avg_spike:.1f}). Tournament ready.")
-            else:
-                msg.append(f"🛡️ **Safe/Floor:** Moderate Spike Score ({avg_spike:.1f}). Cash game viable.")
+            if avg_spike > 70: msg.append(f"🔥 **Upside:** High Spike Potential ({avg_spike:.1f}).")
         
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (STRICT ROUTING V7.1)
+# 📂 5. DATA REFINERY (STRICT ROUTING)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -184,7 +180,7 @@ class DataRefinery:
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # 🟢 STRICT MAPPINGS (No 'O/U' to avoid Game Totals)
+        # MAPPINGS (No 'O/U' to prevent Game Total pollution)
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
@@ -196,14 +192,12 @@ class DataRefinery:
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
             'date': ['DATE', 'GAME DATE'],
             'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
-            # Factors
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
             'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
             'factor_proj': ["ROTOWIRE PROJECTION FACTOR", "PROJ FACTOR"]
         }
         
-        # 🟢 DEDICATED PLATFORM ROUTING
         site_maps = {
             'prizepicks_line': ['PRIZEPICKS LINE', 'PRIZEPICKS'],
             'underdog_line': ['UNDERDOG LINE', 'UNDERDOG'],
@@ -252,8 +246,6 @@ class DataRefinery:
     def merge(base, new_df):
         if base.empty: return new_df
         if new_df.empty: return base
-        
-        # 🟢 SMART FUSION: Combine MAX values to prevent data loss
         combined = pd.concat([base, new_df])
         
         numeric_cols = [
@@ -287,12 +279,16 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER
+# 🏭 7. OPTIMIZER (SALARY FIX)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
     
-    if site == 'DK': rules['cap'] = 50000
+    # 🛑 SMART CAP LOGIC
+    if site in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
+        # Uncapped mode for Pick'em sites
+        rules['cap'] = 999999
+    elif site == 'DK': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
     elif site == 'Yahoo': rules['cap'] = 200
     
@@ -332,8 +328,10 @@ def optimize_lineup(df, config):
         st.error(f"❌ Pool is empty for {target_sport}.")
         return None
 
-    if pool['salary'].sum() == 0:
-        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
+    # 🛑 SALARY CHECK SKIPPER
+    pickem_sites = ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']
+    if config['site'] not in pickem_sites and pool['salary'].sum() == 0:
+        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer. (Pick'em sites are OK)")
         return None
 
     if config['slate_games']:
@@ -398,7 +396,7 @@ def get_html_report(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 7.1 (Routing Verified)")
+st.sidebar.caption("Hydra Edition 8.0 (Fully Bolted)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -451,10 +449,11 @@ with tabs[1]:
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()] if not pool.empty else pd.DataFrame()
     
     if active.empty:
-        st.warning(f"No data for {sport}. Please Upload CSV with Salaries.")
+        st.warning(f"No data for {sport}. Please Upload CSV.")
     else:
-        if active['salary'].sum() == 0:
-            st.warning("⚠️ Loaded data has no Salaries. Cannot run Optimizer.")
+        # Warn if using DK/FD without salary, but allow if Pick'em
+        if active['salary'].sum() == 0 and site not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
+             st.warning("⚠️ No Salaries found. Optimizer requires salaries for DK/FD/Yahoo.")
         
         games = sorted(active['game_info'].astype(str).unique())
         slate = st.multiselect("🗓️ Filter Slate", games, default=games)
@@ -479,7 +478,7 @@ with tabs[1]:
                 st.info(f"💡 **Titan Analysis (Lineup 1):** {feedback}")
                 st.markdown(f'<a href="data:text/html;base64,{get_html_report(res)}" download="report.html">📥 Download Cheat Sheet</a>', unsafe_allow_html=True)
             else:
-                st.error("Optimization Failed.")
+                st.error("Optimization Failed (Check Constraints).")
 
 # --- TAB 3: SIMULATION ---
 with tabs[2]:
@@ -494,7 +493,7 @@ with tabs[2]:
 
 # --- TAB 4: PROPS ---
 with tabs[3]:
-    st.markdown("### 🚀 Prop Analyzer (With Logic)")
+    st.markdown("### 🚀 Prop Analyzer")
     pool = st.session_state['prop_pool']
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()].copy() if not pool.empty else pd.DataFrame()
     
@@ -506,6 +505,8 @@ with tabs[3]:
         elif site == 'Sleeper': target_line_col = 'sleeper_line'
         elif site == 'PrizePicks': target_line_col = 'prizepicks_line'
         elif site == 'DraftKings Pick6': target_line_col = 'pick6_line'
+        
+        st.caption(f"🔎 Using Line Source: **{target_line_col.replace('_',' ').title()}** (Fallback to Generic)")
         
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
