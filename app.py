@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V16.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V17.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -44,7 +44,6 @@ class MultiVerseGateway:
         self.headers = {"X-RapidAPI-Key": self.key, "Content-Type": "application/json"}
 
     def fetch_data(self, sport):
-        # API Placeholder - Kept robust for integration
         return pd.DataFrame()
 
 @st.cache_data(ttl=3600)
@@ -88,15 +87,10 @@ class TitanBrain:
         self.bankroll = bankroll
 
     def apply_strategic_boosts(self, row, sport):
-        """
-        The Core Logic Engine.
-        Adjusts Projections based on Weather, Matchups, and Form.
-        Used for BOTH DFS and Props.
-        """
         proj = row['projection']
         notes = []
         
-        # 1. 🔥 HOT HAND (Form)
+        # 1. HOT HAND
         if row.get('l3_fpts', 0) > 0 and row.get('avg_fpts', 0) > 0:
             diff_pct = (row['l3_fpts'] - row['avg_fpts']) / row['avg_fpts']
             if diff_pct > 0.20:
@@ -106,38 +100,35 @@ class TitanBrain:
                 proj *= 0.95
                 notes.append("❄️ Cold Streak")
 
-        # 2. 🌪️ WEATHER (NFL/MLB)
+        # 2. WEATHER
         if sport in ['NFL', 'MLB'] and 'wind' in row and 'precip' in row:
             if row['wind'] > 15 or row['precip'] > 50:
                 pos = str(row['position'])
                 if 'QB' in pos or 'WR' in pos or 'TE' in pos:
-                    proj *= 0.85 # Significant downgrade for passing
+                    proj *= 0.85 
                     notes.append("🌪️ Weather Fade")
                 elif 'RB' in pos or 'DST' in pos:
-                    proj *= 1.05 # Boost for ground game
+                    proj *= 1.05 
                     notes.append("🛡️ Weather Boost")
 
-        # 3. 🛡️ MATCHUP (DvP)
+        # 3. MATCHUP
         if 'opp_rank' in row and row['opp_rank'] > 0:
-            if row['opp_rank'] >= 25: # Vs Bad Defense
+            if row['opp_rank'] >= 25: 
                 proj *= 1.08
                 notes.append("🟢 Elite Matchup")
-            elif row['opp_rank'] <= 5: # Vs Top Defense
+            elif row['opp_rank'] <= 5: 
                 proj *= 0.92
                 notes.append("🔴 Tough Matchup")
 
-        # 4. 🏠 HOME FIELD
+        # 4. HOME FIELD
         if str(row.get('is_home', '')).lower() in ['yes', '1', 'true']:
             proj *= 1.02
 
         return proj, " | ".join(notes)
 
     def calculate_prop_edge(self, row, line_col='prop_line'):
-        # NOTE: 'row' here should already have the 'Smart Projection' from apply_strategic_boosts
         line = row.get(line_col, 0)
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
-        
-        # Use the SMART PROJECTION if available, else standard
         proj = row.get('smart_projection', row.get('projection', 0))
         
         if line <= 0 or proj <= 0: return 0, "No Data", 0.0, "Insufficient Data"
@@ -145,7 +136,6 @@ class TitanBrain:
         edge_raw = abs(proj - line) / line
         win_prob = min(0.78, 0.52 + (edge_raw * 0.55))
         
-        # Kelly Logic
         odds = 0.909
         kelly = ((odds * win_prob) - (1 - win_prob)) / odds
         units = max(0, kelly * 0.3) * 100 
@@ -155,10 +145,9 @@ class TitanBrain:
         elif units > 1.5: rating = "🟢 NUCLEAR"
         elif units > 0.5: rating = "🟡 KINETIC"
         
-        # Logic Explanation String
         reasoning = []
         if edge_raw > 0.10: reasoning.append(f"🟢 {edge_raw*100:.0f}% Edge")
-        if 'notes' in row and row['notes']: reasoning.append(row['notes']) # Add the Brain Notes (Weather/Form)
+        if 'notes' in row and row['notes']: reasoning.append(row['notes'])
         if row.get('spike_score', 0) > 75: reasoning.append(f"⚡ High Spike")
         
         logic_text = " + ".join(reasoning) if reasoning else "Neutral"
@@ -181,7 +170,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (STRICT ROUTING)
+# 📂 5. DATA REFINERY
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -210,7 +199,6 @@ class DataRefinery:
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # MAPPINGS
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
@@ -226,14 +214,12 @@ class DataRefinery:
             'tm_score': ['TM SCORE', 'IMPLIED TOTAL', 'TEAM TOTAL'], 
             'game_total': ['O/U', 'GAME TOTAL', 'OVER/UNDER'],
             'rst_own': ['RST%', 'OWN%', 'PROJECTED OWNERSHIP'], 
-            # STRATEGIC FIELDS
             'l3_fpts': ['L3 FPTS', 'LAST 3'],
             'avg_fpts': ['AVG FPTS', 'SEASON AVG'],
             'opp_rank': ['OPP RANK', 'OPP PR', 'DVP'],
             'wind': ['WIND', 'WIND SPEED'],
             'precip': ['PRECIP', 'PRECIP %', 'RAIN'],
             'is_home': ['HOME?', 'HOME', 'VENUE'],
-            # FACTORS
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
             'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
@@ -286,7 +272,6 @@ class DataRefinery:
             if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
         std['spike_score'] = std[factors].mean(axis=1).fillna(0)
         
-        # SMART TAGGING
         if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
             std['prizepicks_line'] = std['prop_line']
         elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
@@ -341,7 +326,7 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (DFS + PROPS)
+# 🏭 7. OPTIMIZER (BULLETPROOF)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
@@ -384,17 +369,18 @@ def optimize_lineup(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
+    # 🩹 INJURY FILTER
     if 'status' in pool.columns:
         pool = pool[~pool['status'].str.contains('Out|IR|NA|Doubtful', case=False, na=False)]
     
-    if pool.empty:
-        st.error(f"❌ Pool is empty for {target_sport}.")
-        return None
-
     pickem_sites = ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']
-    if config['site'] not in pickem_sites and pool['salary'].sum() == 0:
-        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
-        return None
+    
+    # 🟢 AUTO-FILTER 0 SALARY PLAYERS FOR DFS SITES
+    if config['site'] not in pickem_sites:
+        pool = pool[pool['salary'] > 0]
+        if pool.empty:
+            st.error("⚠️ No players with salary found. Please upload DFS Player Pool.")
+            return None
 
     # APPLY BRAIN BOOSTS
     brain = TitanBrain(0)
@@ -433,7 +419,7 @@ def optimize_lineup(df, config):
     lineups = []
     player_exposure = {i: 0 for i in pool.index}
     
-    for i in range(config['count']):
+    def solve_lp(relax_stacking=False):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
@@ -443,7 +429,6 @@ def optimize_lineup(df, config):
         randomness = np.random.uniform(0, sim_noise, len(pool))
         
         prob += pulp.lpSum([(pool.loc[p, 'projection'] + randomness[p]) * x[p] for p in pool.index])
-        
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
         prob += pulp.lpSum([x[p] for p in pool.index]) == rules['size']
         
@@ -457,22 +442,30 @@ def optimize_lineup(df, config):
             l_idx = pool[pool['name'].str.contains(lock, regex=False)].index
             if not l_idx.empty: prob += pulp.lpSum([x[p] for p in l_idx]) >= 1
 
-        if config['smart_stack'] and config['sport'] == 'NFL':
+        if not relax_stacking and config['smart_stack'] and config['sport'] == 'NFL':
             qbs = pool[pool['pos_id'] == 'QB'].index
             for qb in qbs:
                 team = pool.loc[qb, 'team']
                 teammates = pool[(pool['team'] == team) & (pool['pos_id'].isin(['WR', 'TE']))].index
-                prob += pulp.lpSum([x[t] for t in teammates]) >= x[qb]
-                if is_small_slate:
-                     prob += pulp.lpSum([x[t] for t in teammates]) >= 2 * x[qb]
+                if not teammates.empty:
+                    prob += pulp.lpSum([x[t] for t in teammates]) >= x[qb]
+                    if is_small_slate: prob += pulp.lpSum([x[t] for t in teammates]) >= 2 * x[qb]
 
         if config['max_exposure'] < 100:
             max_lineups = max(1, int(config['count'] * (config['max_exposure'] / 100.0)))
             for p_idx in pool.index:
-                if player_exposure[p_idx] >= max_lineups:
-                    prob += x[p_idx] == 0
+                if player_exposure[p_idx] >= max_lineups: prob += x[p_idx] == 0
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
+        return prob, x
+
+    for i in range(config['count']):
+        prob, x = solve_lp(relax_stacking=False)
+        
+        # 🟢 AUTO-RETRY IF FAILED
+        if prob.status != 1:
+            # st.warning(f"Lineup {i+1} failed with strict rules. Retrying without stacking...")
+            prob, x = solve_lp(relax_stacking=True)
         
         if prob.status == 1:
             sel = [p for p in pool.index if x[p].varValue == 1]
@@ -480,7 +473,6 @@ def optimize_lineup(df, config):
             lu['Lineup_ID'] = i+1
             lineups.append(lu)
             for p in sel: player_exposure[p] += 1
-            prob += pulp.lpSum([x[p] for p in sel]) <= rules['size'] - 1
             
     return pd.concat(lineups) if lineups else None
 
@@ -498,26 +490,19 @@ def optimize_slips(df, config):
     elif config['book'] == 'DraftKings Pick6': line_col = 'pick6_line'
     
     brain = TitanBrain(0)
-    
-    # 1. APPLY BRAIN BOOSTS (Grandmaster Logic)
     pool[['smart_projection', 'notes']] = pool.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, target_sport)), axis=1)
     
     def calc_score(row):
         line = row.get(line_col, 0)
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
-        
-        # Use SMART Projection
         proj = row.get('smart_projection', row['projection'])
         
         if line <= 0 or proj <= 0: return 0
         edge = abs(proj - line) / line
         score = edge * 100
-        
-        # 2. SHARP MULTIPLIERS
         if row.get('spike_score', 0) > 70: score *= 1.2
         if row.get('factor_hit_rate', 0) > 60: score *= 1.1
-        if 'Weather' in str(row.get('notes', '')): score *= 1.1 # Bonus if weather aware
-        
+        if 'Weather' in str(row.get('notes', '')): score *= 1.1 
         return score
 
     pool['opt_score'] = pool.apply(calc_score, axis=1)
@@ -526,7 +511,6 @@ def optimize_slips(df, config):
     if pool.empty: return None
     
     slips = []
-    
     for i in range(config['count']):
         current_slip = []
         slip_players = set()
@@ -536,19 +520,12 @@ def optimize_slips(df, config):
             if row['name'] in slip_players: continue 
             
             line = row.get(line_col, 0) if row.get(line_col, 0) > 0 else row['prop_line']
-            
-            # Use SMART Projection for Pick Direction
             proj = row.get('smart_projection', row['projection'])
             pick_type = "OVER" if proj > line else "UNDER"
             
             prop_data = {
-                'Player': row['name'],
-                'Market': row['market'],
-                'Line': line,
-                'Smart Proj': proj,
-                'Pick': pick_type,
-                'Score': row['opt_score'],
-                'Notes': row['notes']
+                'Player': row['name'], 'Market': row['market'], 'Line': line,
+                'Smart Proj': proj, 'Pick': pick_type, 'Score': row['opt_score'], 'Notes': row['notes']
             }
             current_slip.append(prop_data)
             slip_players.add(row['name'])
@@ -569,7 +546,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 16.0 (The Sharp)")
+st.sidebar.caption("Hydra Edition 17.0 (Bulletproof)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -664,6 +641,10 @@ with tabs[1]:
                 slate_size = len(slate) if slate else len(games)
                 feedback = brain.analyze_lineup(top_lu, sport, slate_size)
                 st.info(f"💡 **Lineup 1 Analysis:** {feedback}")
+                
+                # Show Brain Notes
+                if 'notes' in res.columns:
+                    st.caption("🧠 **Brain Notes:** " + ", ".join(res['notes'].dropna().unique()))
                 
                 csv_data = get_csv_download(res)
                 st.download_button("📥 Export CSV", data=csv_data, file_name="titan_lineups.csv", mime="text/csv")
