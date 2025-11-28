@@ -20,12 +20,12 @@ except ImportError:
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V43.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V46.0", page_icon="🌌")
 
 st.markdown("""
 <style>
     .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
-    .titan-card { background: #111; border: 1px solid #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #29b6f6; }
+    .titan-card { background: #111; border: 1px solid #333; padding: 15px; border-radius: 8px; margin-bottom: 10px; }
     div[data-testid="stDataFrame"] { border: 1px solid #333; border-radius: 5px; }
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
@@ -49,21 +49,28 @@ class MultiVerseGateway:
     def fetch_data(self, sport):
         data = []
         try:
+            # NBA
             if sport == 'NBA':
                 url = "https://api-nba-v1.p.rapidapi.com/games"
                 self.headers["X-RapidAPI-Host"] = "api-nba-v1.p.rapidapi.com"
-                res = requests.get(url, headers=self.headers, params={"date": datetime.now().strftime("%Y-%m-%d")})
+                params = {"date": datetime.now().strftime("%Y-%m-%d")}
+                res = requests.get(url, headers=self.headers, params=params)
                 if res.status_code == 200:
-                    for g in res.json().get('response', []):
-                        data.append({'game_info': f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"})
+                    games = res.json().get('response', [])
+                    for g in games:
+                        matchup = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
+                        data.append({'game_info': matchup, 'sport': 'NBA'})
+            # NFL
             elif sport == 'NFL':
                 url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
                 self.headers["X-RapidAPI-Host"] = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com"
-                res = requests.get(url, headers=self.headers, params={"gameDate": datetime.now().strftime("%Y%m%d")})
+                params = {"gameDate": datetime.now().strftime("%Y%m%d")}
+                res = requests.get(url, headers=self.headers, params=params)
                 if res.status_code == 200:
-                    for g in res.json().get('body', []):
-                        data.append({'game_info': g.get('gameID')})
-        except: pass
+                    games = res.json().get('body', [])
+                    for g in games:
+                        data.append({'game_info': g.get('gameID'), 'sport': 'NFL'})
+        except Exception as e: pass
         return pd.DataFrame(data)
 
 @st.cache_data(ttl=3600)
@@ -107,7 +114,7 @@ class TitanBrain:
         notes = []
         
         try:
-            # 1. HOT HAND
+            # Hot Hand
             if row.get('l3_fpts', 0) > 0 and row.get('avg_fpts', 0) > 0:
                 diff_pct = (row['l3_fpts'] - row['avg_fpts']) / row['avg_fpts']
                 if diff_pct > 0.20:
@@ -117,25 +124,20 @@ class TitanBrain:
                     proj *= 0.95
                     notes.append("❄️ Cold Streak")
 
-            # 2. WEATHER
-            if sport in ['NFL', 'MLB'] and 'wind' in row and 'precip' in row:
-                if row['wind'] > 15 or row['precip'] > 50:
-                    pos = str(row.get('position', ''))
-                    if 'QB' in pos or 'WR' in pos or 'TE' in pos:
-                        proj *= 0.85 
-                        notes.append("🌪️ Weather Fade")
-                    elif 'RB' in pos or 'DST' in pos:
-                        proj *= 1.05 
-                        notes.append("🛡️ Weather Boost")
+            # Weather
+            if sport in ['NFL', 'MLB'] and row.get('wind', 0) > 15:
+                pos = str(row.get('position', ''))
+                if 'QB' in pos or 'WR' in pos:
+                    proj *= 0.85 
+                    notes.append("🌪️ Weather Fade")
 
-            # 3. MATCHUP
-            if 'opp_rank' in row and row['opp_rank'] > 0:
-                if row['opp_rank'] >= 25: 
-                    proj *= 1.08
-                    notes.append("🟢 Elite Matchup")
-                elif row['opp_rank'] <= 5: 
-                    proj *= 0.92
-                    notes.append("🔴 Tough Matchup")
+            # Matchup
+            if row.get('opp_rank', 16) >= 25: 
+                proj *= 1.08
+                notes.append("🟢 Elite Matchup")
+            elif row.get('opp_rank', 16) <= 5: 
+                proj *= 0.92
+                notes.append("🔴 Tough Matchup")
 
         except Exception: pass
         return proj, " | ".join(notes)
@@ -174,9 +176,6 @@ class TitanBrain:
         avg_proj = lineup_df['projection'].mean()
         msg.append(f"📊 **Proj:** {avg_proj:.1f}")
         
-        salary_used = lineup_df['salary'].sum()
-        msg.append(f"💰 **Cap:** ${salary_used:,}")
-        
         if slate_size <= 4 and len(heavy_stack) < 1: 
             msg.append("⚠️ Small Slate needs correlation!")
         
@@ -188,7 +187,10 @@ class TitanBrain:
 class DataRefinery:
     @staticmethod
     def clean_curr(val):
-        try: return float(re.sub(r'[^\d.-]', '', str(val).strip()))
+        try:
+            s = str(val).strip()
+            if s.lower() in ['-', '', 'nan', 'none']: return 0.0
+            return float(re.sub(r'[^\d.-]', '', s))
         except: return 0.0
 
     @staticmethod
@@ -202,10 +204,10 @@ class DataRefinery:
         if 'GUARD' in p: return 'G'
         if 'FORWARD' in p: return 'F'
         if 'CENTER' in p: return 'C'
-        # CBB Fix
+        # CBB
         if 'G/UTIL' in p: return 'G'
         if 'F/UTIL' in p: return 'F'
-        # NHL Fix
+        # NHL
         if 'LEFT WING' in p: return 'LW'
         if 'RIGHT WING' in p: return 'RW'
         if 'GOALIE' in p: return 'G'
@@ -226,22 +228,14 @@ class DataRefinery:
             'prop_line': ['LINE', 'PROP', 'PLAYER PROP', 'STRIKE', 'TOTAL'], 
             'market': ['MARKET NAME', 'MARKET', 'STAT'],
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
-            'date': ['DATE', 'GAME DATE'],
-            'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
             'status': ['STATUS', 'INJURY', 'AVAILABILITY'], 
             'tm_score': ['TM SCORE', 'IMPLIED TOTAL', 'TEAM TOTAL'], 
-            'game_total': ['O/U', 'GAME TOTAL', 'OVER/UNDER'],
             'rst_own': ['RST%', 'OWN%', 'PROJECTED OWNERSHIP'], 
             'l3_fpts': ['L3 FPTS', 'LAST 3'],
             'avg_fpts': ['AVG FPTS', 'SEASON AVG'],
             'opp_rank': ['OPP RANK', 'OPP PR', 'DVP'],
             'wind': ['WIND', 'WIND SPEED'],
-            'precip': ['PRECIP', 'PRECIP %', 'RAIN'],
-            'is_home': ['HOME?', 'HOME', 'VENUE'],
-            'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
-            'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
-            'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
-            'factor_proj': ["ROTOWIRE PROJECTION FACTOR", "PROJ FACTOR"]
+            'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"]
         }
         
         site_maps = {
@@ -254,14 +248,10 @@ class DataRefinery:
         for target, sources in maps.items():
             for s in sources:
                 if s in df.columns:
-                    if target in ['projection', 'salary', 'prop_line', 'tm_score', 'game_total', 'rst_own', 'l3_fpts', 'avg_fpts', 'opp_rank', 'wind', 'precip', 'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']:
+                    if target in ['projection', 'salary', 'prop_line', 'tm_score', 'rst_own', 'l3_fpts', 'avg_fpts', 'opp_rank', 'wind', 'factor_hit_rate']:
                         std[target] = df[s].apply(DataRefinery.clean_curr)
-                    elif target == 'name':
-                        std[target] = df[s].astype(str).apply(lambda x: x.split('(')[0].strip())
                     elif target == 'position':
                         std[target] = df[s].apply(DataRefinery.normalize_pos)
-                    elif target == 'status':
-                        std[target] = df[s].astype(str).str.strip()
                     else:
                         std[target] = df[s].astype(str).str.strip()
                     break
@@ -275,21 +265,15 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
-        # 🟢 FIX: AUTO-GENERATE GAME INFO
-        if 'game_info' not in std.columns:
-            if 'team' in std.columns and 'opp' in std.columns:
-                std['game_info'] = std['team'] + ' vs ' + std['opp']
-                if 'time' in std.columns:
-                     std['game_info'] += ' (' + std['time'].astype(str) + ')'
-            else:
-                std['game_info'] = 'All Games'
-        
         if 'status' not in std.columns: std['status'] = 'Active'
         else: std['status'].fillna('Active', inplace=True)
         
-        defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 'opp':'N/A',
-                   'market':'Standard', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'rst_own':10.0,
-                   'l3_fpts':0.0, 'avg_fpts':0.0, 'opp_rank':16.0, 'wind':0.0, 'precip':0.0, 'is_home':'No'}
+        if 'game_info' not in std.columns:
+             if 'team' in std.columns and 'opp' in std.columns: std['game_info'] = std['team'] + " vs " + std['opp']
+             else: std['game_info'] = 'All Games'
+
+        defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
+                   'market':'Standard', 'rst_own':10.0, 'l3_fpts':0.0, 'avg_fpts':0.0, 'opp_rank':16.0, 'wind':0.0}
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
         
@@ -299,24 +283,17 @@ class DataRefinery:
         if 'salary' in std.columns and 'projection' in std.columns:
             std['value_score'] = np.where(std['salary'] > 0, (std['projection'] / std['salary']) * 1000, 0)
         
-        factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
+        factors = ['factor_hit_rate']
         valid_factors = [f for f in factors if f in std.columns]
         if valid_factors:
-            for f in valid_factors:
-                std[f] = pd.to_numeric(std[f], errors='coerce')
+            for f in valid_factors: std[f] = pd.to_numeric(std[f], errors='coerce')
             std['spike_score'] = std[valid_factors].mean(axis=1).fillna(0)
         else:
             std['spike_score'] = 0.0 
         
-        if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
-            std['prizepicks_line'] = std['prop_line']
-        elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
-            std['underdog_line'] = std['prop_line']
-        elif source_tag == 'Sleeper' and std['sleeper_line'].sum() == 0:
-            std['sleeper_line'] = std['prop_line']
-        elif source_tag == 'DraftKings Pick6' and std['pick6_line'].sum() == 0:
-            std['pick6_line'] = std['prop_line']
-            
+        if source_tag == 'PrizePicks': std['prizepicks_line'] = std['prop_line']
+        elif source_tag == 'Underdog': std['underdog_line'] = std['prop_line']
+        
         return std
 
     @staticmethod
@@ -326,12 +303,12 @@ class DataRefinery:
         combined = pd.concat([base, new_df])
         
         numeric_cols = [
-            'projection', 'salary', 'prop_line', 'value_score', 'tm_score', 'game_total', 'rst_own',
-            'l3_fpts', 'avg_fpts', 'opp_rank', 'wind', 'precip',
+            'projection', 'salary', 'prop_line', 'value_score', 'tm_score', 'rst_own',
+            'l3_fpts', 'avg_fpts', 'opp_rank', 'wind',
             'prizepicks_line', 'underdog_line', 'sleeper_line', 'pick6_line',
-            'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj', 'spike_score'
+            'factor_hit_rate', 'spike_score'
         ]
-        meta_cols = ['position', 'team', 'game_info', 'date', 'time', 'status', 'is_home', 'opp']
+        meta_cols = ['position', 'team', 'game_info', 'status', 'is_home']
         
         agg_dict = {col: 'max' for col in numeric_cols if col in combined.columns}
         for col in meta_cols:
@@ -359,7 +336,7 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (ALL SPORTS + CBB)
+# 🏭 7. OPTIMIZER (ALL SPORTS)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
@@ -431,13 +408,8 @@ def optimize_lineup(df, config):
         pool['notes'] = applied[1]
     except: pass
 
-    unique_games = pool['game_info'].nunique()
-    is_small_slate = unique_games <= 4
-    st.info(f"📊 **Slate Context:** {unique_games} Games. Strategy: {'Aggressive/Correlation' if is_small_slate else 'Standard'}")
-
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
-    
     if config['positions']:
         pool = pool[pool['position'].isin(config['positions'])].reset_index(drop=True)
 
@@ -510,7 +482,7 @@ def optimize_lineup(df, config):
     return pd.concat(lineups) if lineups else None
 
 # ==========================================
-# 🧩 8. PROP OPTIMIZER (ROBUST FIX)
+# 🧩 8. PROP OPTIMIZER
 # ==========================================
 def optimize_slips(df, config):
     target_sport = config['sport'].strip().upper()
@@ -521,8 +493,6 @@ def optimize_slips(df, config):
     line_col = 'prop_line'
     if config['book'] == 'PrizePicks': line_col = 'prizepicks_line'
     elif config['book'] == 'Underdog': line_col = 'underdog_line'
-    elif config['book'] == 'Sleeper': line_col = 'sleeper_line'
-    elif config['book'] == 'DraftKings Pick6': line_col = 'pick6_line'
     
     brain = TitanBrain(0)
     
@@ -536,18 +506,14 @@ def optimize_slips(df, config):
     
     pool['smart_projection'] = pd.to_numeric(pool['smart_projection'], errors='coerce').fillna(0)
     pool[line_col] = pd.to_numeric(pool[line_col], errors='coerce').fillna(0)
-    pool['prop_line'] = pd.to_numeric(pool['prop_line'], errors='coerce').fillna(0)
     
     def calc_score(row):
         line = row[line_col] if row[line_col] > 0 else row['prop_line']
         proj = row['smart_projection']
-        
         if line <= 0 or proj <= 0: return 0
         edge = abs(proj - line) / line
         score = edge * 100
         if row.get('spike_score', 0) > 70: score *= 1.2
-        if row.get('factor_hit_rate', 0) > 60: score *= 1.1
-        if 'Weather' in str(row.get('notes', '')): score *= 1.1 
         return score
 
     pool['opt_score'] = pool.apply(calc_score, axis=1)
@@ -565,7 +531,7 @@ def optimize_slips(df, config):
             if len(current_slip) >= config['legs']: break
             if row['name'] in slip_players: continue 
             
-            # 🧩 CORRELATION BOOST
+            # CORRELATION BOOST
             if config['correlation'] and row['team'] in slip_teams:
                  row['opt_score'] *= 1.1
             
@@ -593,19 +559,14 @@ def get_csv_download(df):
     return df.to_csv(index=False).encode('utf-8')
 
 # ==========================================
-# 🖥️ 9. DASHBOARD (SPLIT UI)
+# 🖥️ 9. DASHBOARD
 # ==========================================
 conn = init_db()
-st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 43.0 (Complete)")
-
-try: API_KEY = st.secrets["rapid_api_key"]
-except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
-
+st.sidebar.title("TITAN OMNI V46")
 current_bank = get_bankroll(conn)
-st.sidebar.metric("🏦 Bankroll", f"${current_bank:,.2f}")
+st.sidebar.metric("Bankroll", f"${current_bank:,.2f}")
 
-sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2", "CBB"])
+sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2"])
 site = st.sidebar.selectbox("Site/Book", ["DK", "FD", "Yahoo", "PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
 
 tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay", "6. 🧩 Prop Opt"])
