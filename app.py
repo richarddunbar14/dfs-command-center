@@ -16,11 +16,11 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN UNIVERSAL", page_icon="🌍")
+st.set_page_config(layout="wide", page_title="TITAN APEX", page_icon="🦁")
 
 st.markdown("""
 <style>
-    /* THEME: Universal Dark */
+    /* THEME: Apex Predator (Black & Neon) */
     .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
     
     /* CARDS */
@@ -31,7 +31,7 @@ st.markdown("""
     .titan-card-prop { border-left: 4px solid #00ff41; }
     
     /* METRICS */
-    div[data-testid="stMetricValue"] { color: #00ff41; text-shadow: 0 0 10px rgba(0,255,65,0.3); }
+    div[data-testid="stMetricValue"] { color: #00ff41; text-shadow: 0 0 10px rgba(0,255,65,0.3); font-family: 'Oswald', sans-serif; }
     
     /* BUTTONS */
     .stButton>button { 
@@ -39,6 +39,9 @@ st.markdown("""
         background: linear-gradient(90deg, #111 0%, #222 100%); color: #00d2ff; border: 1px solid #00d2ff; transition: 0.3s;
     }
     .stButton>button:hover { background: #00d2ff; color: #000; box-shadow: 0 0 15px #00d2ff; }
+    
+    /* DATAFRAMES */
+    .stDataFrame { border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,110 +49,20 @@ st.markdown("""
 if 'dfs_pool' not in st.session_state: st.session_state['dfs_pool'] = pd.DataFrame()
 if 'prop_pool' not in st.session_state: st.session_state['prop_pool'] = pd.DataFrame()
 if 'ai_intel' not in st.session_state: st.session_state['ai_intel'] = {}
-if 'api_log' not in st.session_state: st.session_state['api_log'] = []
 
-# MASTER KEY
-RAPID_KEY = "cf5f5b1102mshedbe3c14b0eb432p176b16jsnf9b2d93c804c"
-
-# ==========================================
-# 📡 2. LEVIATHAN ROUTER (ALL SPORTS)
-# ==========================================
-
-class LeviathanRouter:
-    def __init__(self, key):
-        self.key = key
-        self.headers = {"X-RapidAPI-Key": key}
-
-    def fetch(self, sport):
-        """Routes to specific APIs for WNBA, CBB, CFB, etc."""
-        data = []
-        log = []
-        today_compact = datetime.now().strftime("%Y%m%d")
-
-        try:
-            # --- NBA ---
-            if sport == 'NBA':
-                url = "https://api-nba-v1.p.rapidapi.com/games"
-                self.headers["X-RapidAPI-Host"] = "api-nba-v1.p.rapidapi.com"
-                params = {"date": datetime.now().strftime("%Y-%m-%d")}
-                res = requests.get(url, headers=self.headers, params=params)
-                log.append(f"✅ NBA API: {res.status_code}")
-
-            # --- WNBA (NEW) ---
-            elif sport == 'WNBA':
-                # Using standard basketball API or WNBA specific if available
-                url = "https://api-basketball.p.rapidapi.com/games"
-                self.headers["X-RapidAPI-Host"] = "api-basketball.p.rapidapi.com"
-                params = {"date": datetime.now().strftime("%Y-%m-%d"), "league": "13"} # 13 is often WNBA
-                res = requests.get(url, headers=self.headers, params=params)
-                log.append(f"✅ WNBA API: {res.status_code}")
-
-            # --- NFL ---
-            elif sport == 'NFL':
-                url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDFSProjections"
-                self.headers["X-RapidAPI-Host"] = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com"
-                params = {"gameDate": today_compact, "slate": "main"}
-                res = requests.get(url, headers=self.headers, params=params)
-                if res.status_code == 200:
-                    raw = res.json().get('body', [])
-                    for p in raw:
-                         if isinstance(p, dict):
-                            data.append({
-                                'name': p.get('player'), 'salary': float(p.get('salary', 0) or 0),
-                                'projection': float(p.get('fantasyPoints', 0) or 0),
-                                'position': p.get('pos'), 'team': p.get('team'), 'sport': 'NFL'
-                            })
-                    log.append(f"✅ NFL Tank01: {len(data)} players")
-
-            # --- CFB (NEW) ---
-            elif sport == 'CFB':
-                url = "https://college-football-api.p.rapidapi.com/games"
-                self.headers["X-RapidAPI-Host"] = "college-football-api.p.rapidapi.com"
-                params = {"year": datetime.now().year, "seasonType": "regular"}
-                res = requests.get(url, headers=self.headers, params=params)
-                log.append(f"✅ CFB API: {res.status_code}")
-
-            # --- MLB (NEW) ---
-            elif sport == 'MLB':
-                url = "https://tank01-mlb-live-in-game-real-time-statistics.p.rapidapi.com/getDailyGameList"
-                self.headers["X-RapidAPI-Host"] = "tank01-mlb-live-in-game-real-time-statistics.p.rapidapi.com"
-                res = requests.get(url, headers=self.headers, params={"gameDate": today_compact})
-                log.append(f"✅ MLB API: {res.status_code}")
-
-            # --- CBB (NEW) ---
-            elif sport == 'CBB':
-                url = "https://tank01-ncaab-live-in-game-real-time-statistics.p.rapidapi.com/getDailyGameList"
-                self.headers["X-RapidAPI-Host"] = "tank01-ncaab-live-in-game-real-time-statistics.p.rapidapi.com"
-                res = requests.get(url, headers=self.headers, params={"gameDate": today_compact})
-                log.append(f"✅ CBB API: {res.status_code}")
-
-            # --- NHL ---
-            elif sport == 'NHL':
-                url = "https://nhl-stats-and-salary.p.rapidapi.com/players"
-                self.headers["X-RapidAPI-Host"] = "nhl-stats-and-salary.p.rapidapi.com"
-                res = requests.get(url, headers=self.headers)
-                log.append(f"✅ NHL API: {res.status_code}")
-            
-            # --- PROPS BACKUP (Pinnacle) ---
-            url_odds = "https://pinnacle-odds.p.rapidapi.com/kit/v1/special-markets"
-            self.headers["X-RapidAPI-Host"] = "pinnacle-odds.p.rapidapi.com"
-            requests.get(url_odds, headers=self.headers, params={"sport_id": "1", "is_have_odds": "1"})
-            log.append("✅ Pinnacle Odds: Active")
-
-        except Exception as e:
-            log.append(f"❌ API Error: {e}")
-
-        st.session_state['api_log'] = log
-        return pd.DataFrame(data)
+# API KEYS
+SPORTSDATAIO_KEY = "dda563b328d34b80a38c26cd43223614"
+ODDS_API_KEY = "a31f629075c27927fe99b097b51e1717"
 
 # ==========================================
-# 💾 3. DATABASE
+# 💾 2. BANKROLL DATABASE
 # ==========================================
 
 def init_db():
-    conn = sqlite3.connect('titan_universal.db')
+    conn = sqlite3.connect('titan_apex.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS bankroll (id INTEGER PRIMARY KEY, date TEXT, amount REAL, notes TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bankroll 
+                 (id INTEGER PRIMARY KEY, date TEXT, amount REAL, notes TEXT)''')
     c.execute('SELECT count(*) FROM bankroll')
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO bankroll (date, amount, notes) VALUES (?, ?, ?)", 
@@ -167,7 +80,30 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN
+# 📡 3. UNIVERSAL GATEWAY (APIs)
+# ==========================================
+
+class UniversalGateway:
+    def __init__(self):
+        self.sdio_key = SPORTSDATAIO_KEY
+        self.odds_key = ODDS_API_KEY
+
+    def fetch_live_props(self, sport):
+        """Fetches Live Betting Lines."""
+        maps = {'NFL': 'americanfootball_nfl', 'NBA': 'basketball_nba', 'MLB': 'baseball_mlb', 'NHL': 'icehockey_nhl'}
+        key = maps.get(sport)
+        if not key: return pd.DataFrame()
+        
+        url = f"https://api.the-odds-api.com/v4/sports/{key}/odds"
+        params = {'apiKey': self.odds_key, 'regions': 'us', 'markets': 'player_points,h2h', 'oddsFormat': 'american'}
+        
+        try:
+            res = requests.get(url, params=params).json()
+            return pd.DataFrame(res) 
+        except: return pd.DataFrame()
+
+# ==========================================
+# 🧠 4. TITAN BRAIN (PREDATOR LOGIC)
 # ==========================================
 
 class TitanBrain:
@@ -181,16 +117,23 @@ class TitanBrain:
         line = row['prop_line']
         edge_raw = abs(proj - line) / line
         
-        win_prob = min(0.78, 0.52 + (edge_raw * 0.55))
+        # Win Prob (Logistic with Outlier Dampening)
+        win_prob = 0.52 + (edge_raw * 0.50)
+        if edge_raw > 0.30: win_prob = 0.65 # Cap massive outliers to avoid trap
+        win_prob = min(0.75, win_prob)
         
-        odds = 0.909
+        # Kelly Criterion
+        odds = 0.909 # -110
         kelly = ((odds * win_prob) - (1 - win_prob)) / odds
-        units = max(0, kelly * 0.3) * 100 
+        
+        # Dynamic Sizing
+        confidence_mult = 0.5 if win_prob > 0.60 else 0.25
+        units = max(0, kelly * confidence_mult) * 100 
         
         rating = "PASS"
-        if units > 3.0: rating = "💎 ATOMIC"
-        elif units > 1.5: rating = "🟢 NUCLEAR"
-        elif units > 0.5: rating = "🟡 KINETIC"
+        if units > 3.5: rating = "💎 WHALE"
+        elif units > 2.0: rating = "🟢 SHARP"
+        elif units > 0.5: rating = "🟡 PUBLIC"
         
         return units, rating, win_prob * 100
 
@@ -219,13 +162,14 @@ class DataRefinery:
             'position': ['POS', 'POSITION', 'ROSTER POSITION'],
             'team': ['TEAM', 'TM', 'SQUAD'],
             'prop_line': ['O/U', 'PROP', 'LINE', 'STRIKE', 'TOTAL'],
+            'ownership': ['OWN', 'OWNERSHIP', 'PROJ OWN'],
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP']
         }
         
         for target, sources in maps.items():
             for s in sources:
                 if s in df.columns:
-                    if target in ['projection', 'salary', 'prop_line']:
+                    if target in ['projection', 'salary', 'prop_line', 'ownership']:
                         std[target] = df[s].apply(DataRefinery.clean_curr)
                     elif target == 'name':
                         std[target] = df[s].astype(str).apply(lambda x: x.split('(')[0].strip())
@@ -234,7 +178,7 @@ class DataRefinery:
                     break
         
         if 'name' not in std.columns: return pd.DataFrame()
-        for c in ['projection', 'salary', 'prop_line']: 
+        for c in ['projection', 'salary', 'prop_line', 'ownership']: 
             if c not in std.columns: std[c] = 0.0
         if 'position' not in std.columns: std['position'] = 'FLEX'
         if 'team' not in std.columns: std['team'] = 'N/A'
@@ -265,7 +209,7 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER & SIMULATION
+# 🏭 7. OPTIMIZER & SIMULATION (PREDATOR MODE)
 # ==========================================
 
 def get_roster_rules(sport, site, mode):
@@ -283,12 +227,10 @@ def get_roster_rules(sport, site, mode):
             rules['constraints'].append(('MVP', 1, 1))
         return rules
 
-    # --- SPORT SPECIFIC RULES ---
     if sport == 'NFL':
         rules['size'] = 9
         if site == 'DK': rules['constraints'] = [('QB', 1, 1), ('DST', 1, 1), ('RB', 2, 3), ('WR', 3, 4), ('TE', 1, 2), ('RB|WR|TE', 7, 7)]
         elif site == 'FD': rules['constraints'] = [('QB', 1, 1), ('DEF', 1, 1), ('RB', 2, 3), ('WR', 3, 4), ('TE', 1, 2), ('RB|WR|TE', 7, 7)]
-    
     elif sport == 'NBA':
         if site == 'DK':
             rules['size'] = 8
@@ -296,23 +238,10 @@ def get_roster_rules(sport, site, mode):
         elif site == 'FD':
             rules['size'] = 9
             rules['constraints'] = [('PG', 2, 2), ('SG', 2, 2), ('SF', 2, 2), ('PF', 2, 2), ('C', 1, 1)]
-    
-    elif sport == 'WNBA': # Similar to NBA but often simpler on FD
-        if site == 'DK': rules['size'] = 6; rules['constraints'] = [('G', 2, 3), ('F', 3, 4)]
-        elif site == 'FD': rules['size'] = 7; rules['constraints'] = [('G', 3, 3), ('F', 4, 4)]
-        
     elif sport == 'MLB':
         rules['size'] = 10
         if site == 'DK': rules['constraints'] = [('P', 2, 2), ('C|1B|2B|3B|SS|OF', 8, 8)]
-        
-    elif sport == 'CBB': # College Basketball
-        rules['size'] = 8 # Classic DK
-        if site == 'DK': rules['constraints'] = [('G', 3, 4), ('F', 3, 4)]
-        
-    elif sport == 'CFB': # College Football
-        rules['size'] = 9
-        if site == 'DK': rules['constraints'] = [('QB', 1, 2), ('RB', 2, 4), ('WR', 3, 5)]
-
+            
     return rules
 
 def optimize_lineup(df, config):
@@ -324,10 +253,18 @@ def optimize_lineup(df, config):
     if config['bans']: pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
     if pool.empty: return None
 
+    # --- ADVANCED: OWNERSHIP FADE ---
+    # Penalize high owned players slightly to find leverage
+    if 'ownership' in pool.columns and config['mode'] == 'Classic':
+        pool['adj_proj'] = pool['projection'] - (pool['ownership'] * 0.05)
+    else:
+        pool['adj_proj'] = pool['projection']
+
     if config['mode'] == 'Showdown':
         flex = pool.copy(); flex['pos_id'] = 'FLEX'
         cpt = pool.copy(); cpt['pos_id'] = 'CPT' if config['site']=='DK' else 'MVP'
         cpt['name'] += f" ({cpt['pos_id'].iloc[0]})"
+        cpt['adj_proj'] *= 1.5
         cpt['projection'] *= 1.5
         if config['site'] == 'DK': cpt['salary'] *= 1.5
         pool = pd.concat([cpt, flex]).reset_index(drop=True)
@@ -337,32 +274,59 @@ def optimize_lineup(df, config):
     rules = get_roster_rules(config['sport'], config['site'], config['mode'])
     lineups = []
     
+    # TRACKER FOR EXPOSURE
+    player_usage = {i: 0 for i in pool.index}
+    
     for i in range(config['count']):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
-        # Sim Variance
+        # Sim Variance (Monte Carlo)
         volatility = 0.15 if config['sim'] else 0.0
-        pool['sim'] = pool['projection'] * np.random.normal(1.0, volatility, len(pool))
+        pool['sim'] = pool['adj_proj'] * np.random.normal(1.0, volatility, len(pool))
         
         prob += pulp.lpSum([pool.loc[p, 'sim'] * x[p] for p in pool.index])
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
         prob += pulp.lpSum([x[p] for p in pool.index]) == rules['size']
         
+        # --- STRUCTURAL RULES ---
         for role, min_req, max_req in rules['constraints']:
             idx = pool[pool['pos_id'].str.contains(role, regex=True, na=False)].index
             if not idx.empty:
                 prob += pulp.lpSum([x[p] for p in idx]) >= min_req
                 prob += pulp.lpSum([x[p] for p in idx]) <= max_req
 
+        # --- LOCKS ---
         for lock in config['locks']:
             l_idx = pool[pool['name'].str.contains(lock, regex=False)].index
             if not l_idx.empty: prob += pulp.lpSum([x[p] for p in l_idx]) >= 1
+
+        # --- MAX EXPOSURE ---
+        # If we generated 10 lineups, and exposure limit is 50%, a player can appear in max 5.
+        if config['max_exposure'] < 100:
+            limit = max(1, int(config['count'] * (config['max_exposure'] / 100.0)))
+            for p_idx, usage in player_usage.items():
+                if usage >= limit:
+                    # Don't ban locks
+                    if pool.loc[p_idx, 'name'] not in config['locks']:
+                        prob += x[p_idx] == 0
+
+        # --- STACKING ---
+        if config['mode'] == 'Classic' and config['sport'] == 'NFL' and config['stack']:
+            qbs = pool[pool['pos_id'] == 'QB']
+            for qb in qbs.index:
+                tm = pool.loc[qb, 'team']
+                mates = pool[(pool['team'] == tm) & (pool['pos_id'].str.contains("WR|TE"))]
+                if not mates.empty: prob += pulp.lpSum([x[m] for m in mates.index]) >= x[qb]
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
         if prob.status == 1:
             sel = [p for p in pool.index if x[p].varValue == 1]
+            
+            # Update Usage
+            for p_idx in sel: player_usage[p_idx] += 1
+                
             lu = pool.loc[sel].copy()
             lu['Lineup_ID'] = i+1
             lineups.append(lu)
@@ -371,7 +335,7 @@ def optimize_lineup(df, config):
     return pd.concat(lineups) if lineups else None
 
 def get_html_report(df):
-    html = f"""<html><body><h2>TITAN UNIVERSAL REPORT</h2><hr>"""
+    html = f"""<html><body><h2>TITAN APEX REPORT</h2><hr>"""
     for _, row in df.head(20).iterrows():
         html += f"<div><b>{row['name']}</b> ({row['position']}) | Sal: ${row['salary']} | Proj: {row['projection']:.1f}</div>"
     return base64.b64encode(html.encode()).decode()
@@ -382,7 +346,7 @@ def get_html_report(df):
 
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Universal Dominion")
+st.sidebar.caption("Apex Predator")
 
 history = get_bankroll_history(conn)
 current_bank = history.iloc[-1]['amount']
@@ -399,36 +363,29 @@ with st.sidebar.expander("Update Funds"):
         update_bankroll(conn, new, "Manual")
         st.rerun()
 
-sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "CFB", "CBB", "WNBA", "NHL", "PGA"])
+sport = st.sidebar.selectbox("Sport", ["NFL", "NBA", "MLB", "CFB", "NHL", "PGA", "WNBA", "CBB"])
 site = st.sidebar.selectbox("Site", ["DK", "FD", "Yahoo", "PrizePicks"])
 
 tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay"])
 
 # --- TAB 1: DATA ---
 with tabs[0]:
-    st.markdown("### 📡 Hydra Data Router")
+    st.markdown("### 📡 Data Fusion Engine")
     
     col_api, col_file = st.columns(2)
     with col_api:
         if st.button("☁️ AUTO-SYNC APIS"):
-            gw = LeviathanRouter(RAPID_KEY)
-            with st.spinner(f"Routing to {sport} API endpoints..."):
-                api_data = gw.fetch(sport)
-                
-                # Debug Log
-                with st.expander("API Logs"):
-                    for l in st.session_state['api_log']: st.write(l)
-                
-                if not api_data.empty:
+            gw = UniversalGateway()
+            with st.spinner("Fetching Live Data..."):
+                props = gw.fetch_live_props(sport)
+                if not props.empty:
                     ref = DataRefinery()
-                    # Assume API returns raw data we clean
-                    cln = ref.ingest(api_data, sport)
-                    st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], cln)
-                    # Also populate props if applicable
+                    cln = ref.ingest(props, sport)
                     st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], cln)
-                    st.success(f"Hydra synced {len(cln)} items for {sport}.")
+                    st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], cln)
+                    st.success(f"Synced {len(cln)} live props.")
                 else:
-                    st.warning("No data returned from API. Check connection/subscription.")
+                    st.warning("No API data returned.")
 
     with col_file:
         files = st.file_uploader("Upload CSVs (Salary/Proj)", accept_multiple_files=True)
@@ -457,7 +414,6 @@ with tabs[1]:
     if active.empty:
         st.warning(f"No {sport} DFS data loaded.")
     else:
-        # Slate Filter
         games = sorted(active['game_info'].astype(str).unique())
         slate = st.multiselect("🗓️ Filter Slate", games, default=games)
         
@@ -466,19 +422,22 @@ with tabs[1]:
         count = c2.slider("Lineups", 1, 50, 10)
         stack = c3.checkbox("Stacking (NFL)", value=(sport=='NFL'))
         
+        # NEW: EXPOSURE SLIDER
+        max_exposure = st.slider("Max Player Exposure (%)", 10, 100, 100, help="Limit risk by capping player usage.")
+        
         names = sorted(active['name'].unique())
         locks = st.multiselect("Lock", names)
         bans = st.multiselect("Ban", names)
         
         if st.button("⚡ Generate Lineups"):
-            cfg = {'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':bans, 'stack':stack, 'sim':False, 'slate_games':slate}
+            cfg = {'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':bans, 
+                   'stack':stack, 'sim':False, 'slate_games':slate, 'max_exposure': max_exposure}
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             
             if res is not None:
                 st.dataframe(res)
                 st.markdown(f'<a href="data:text/html;base64,{get_html_report(res)}" download="report.html">📥 Download Cheat Sheet</a>', unsafe_allow_html=True)
                 
-                # Visuals
                 fig = px.treemap(res, path=['team'], values='projection', title="Team Exposure")
                 st.plotly_chart(fig, use_container_width=True)
             else:
@@ -488,7 +447,8 @@ with tabs[1]:
 with tabs[2]:
     if st.button("🎲 Run Simulation"):
         with st.spinner("Simulating..."):
-            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[]}
+            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 
+                   'stack':True, 'sim':True, 'slate_games':[], 'max_exposure': 100}
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             if res is not None:
                 exp = res['name'].value_counts(normalize=True).mul(100).reset_index()
