@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V19.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V20.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -28,14 +28,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State (SEPARATED POOLS)
+# Session State
 if 'dfs_pool' not in st.session_state: st.session_state['dfs_pool'] = pd.DataFrame()
 if 'prop_pool' not in st.session_state: st.session_state['prop_pool'] = pd.DataFrame()
 if 'api_log' not in st.session_state: st.session_state['api_log'] = []
 if 'ai_intel' not in st.session_state: st.session_state['ai_intel'] = {}
 
 # ==========================================
-# 📡 2. MULTI-VERSE API ROUTER
+# 📡 2. MULTI-VERSE API ROUTER (RESTORED)
 # ==========================================
 class MultiVerseGateway:
     def __init__(self, api_key):
@@ -43,7 +43,38 @@ class MultiVerseGateway:
         self.headers = {"X-RapidAPI-Key": self.key, "Content-Type": "application/json"}
 
     def fetch_data(self, sport):
-        return pd.DataFrame()
+        data = []
+        try:
+            # --- NBA (API-NBA) ---
+            if sport == 'NBA':
+                url = "https://api-nba-v1.p.rapidapi.com/games"
+                self.headers["X-RapidAPI-Host"] = "api-nba-v1.p.rapidapi.com"
+                params = {"date": datetime.now().strftime("%Y-%m-%d")}
+                res = requests.get(url, headers=self.headers, params=params)
+                if res.status_code == 200:
+                    games = res.json().get('response', [])
+                    for g in games:
+                        game_str = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
+                        data.append({'game_info': game_str, 'sport': 'NBA'})
+
+            # --- NFL (Tank01) ---
+            elif sport == 'NFL':
+                url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
+                self.headers["X-RapidAPI-Host"] = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com"
+                params = {"gameDate": datetime.now().strftime("%Y%m%d")}
+                res = requests.get(url, headers=self.headers, params=params)
+                if res.status_code == 200:
+                    games = res.json().get('body', [])
+                    for g in games:
+                        data.append({'game_info': g.get('gameID'), 'sport': 'NFL'})
+            
+            # --- MLB, NHL, etc. (Placeholders for extensibility) ---
+            # You can add more endpoints here following the same pattern
+
+        except Exception as e:
+            st.error(f"API Error: {e}")
+            
+        return pd.DataFrame(data)
 
 @st.cache_data(ttl=3600)
 def cached_api_fetch(sport, key):
@@ -79,7 +110,7 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN (UNIFIED INTELLIGENCE)
+# 🧠 4. TITAN BRAIN
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
@@ -242,7 +273,7 @@ class DataRefinery:
                     elif target == 'position':
                         std[target] = df[s].apply(DataRefinery.normalize_pos)
                     elif target == 'status':
-                        std[target] = df[s].astype(str).str.strip() # Don't zero out strings
+                        std[target] = df[s].astype(str).str.strip()
                     else:
                         std[target] = df[s].astype(str).str.strip()
                     break
@@ -256,7 +287,7 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
-        # 🟢 CRITICAL: Fill missing status to avoid accidental filtering
+        # Fill missing status to avoid accidental filtering
         if 'status' not in std.columns: std['status'] = 'Active'
         else: std['status'].fillna('Active', inplace=True)
         
@@ -376,7 +407,8 @@ def optimize_lineup(df, config):
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
     # 🟢 CRITICAL FIX: Ensure only valid salaries exist for DFS
-    pool = pool[pool['salary'] > 0]
+    if config['site'] not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
+        pool = pool[pool['salary'] > 0]
     
     # 🩹 INJURY FILTER
     if 'status' in pool.columns:
@@ -384,11 +416,6 @@ def optimize_lineup(df, config):
     
     if pool.empty:
         st.error(f"❌ No valid DFS players found for {target_sport}. Please upload DFS CSV.")
-        return None
-
-    pickem_sites = ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']
-    if config['site'] not in pickem_sites and pool['salary'].sum() == 0:
-        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
         return None
 
     # APPLY BRAIN BOOSTS
@@ -557,7 +584,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 19.0 (Perfected)")
+st.sidebar.caption("Hydra Edition 20.0 (The Completed System)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -586,31 +613,42 @@ with tabs[0]:
                  with st.spinner("Syncing..."):
                     cached_api_fetch(sport, API_KEY)
                     st.success("Sync Complete")
-    with col_file:
-        source_tag = st.selectbox("🏷️ Select Source for Upload:", ["Generic/Combined", "PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
-        files = st.file_uploader(f"Upload {source_tag} CSVs", accept_multiple_files=True)
-        
-        if st.button("🧬 Fuse Files"):
-            if files:
+    
+    st.divider()
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.info("🏰 **DFS UPLOAD (DraftKings/FanDuel)**")
+        dfs_files = st.file_uploader("Upload DFS CSVs (Must have Salaries)", accept_multiple_files=True, key="dfs_up")
+        if st.button("🧬 Load DFS Data"):
+            if dfs_files:
                 ref = DataRefinery()
                 new_data = pd.DataFrame()
-                for f in files:
+                for f in dfs_files:
                     try:
-                        try: raw = pd.read_csv(f, encoding='utf-8-sig')
-                        except: raw = pd.read_excel(f)
-                        st.caption(f"Ingesting {f.name} as {source_tag}...")
-                        new_data = ref.merge(new_data, ref.ingest(raw, sport, source_tag))
-                    except Exception as e: st.error(f"Error {f.name}: {e}")
-                
-                # SEPARATE POOLS LOGIC
-                if source_tag == "Generic/Combined":
-                    # Assume DFS if generic
-                    st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
-                else:
-                    # Assume Prop if specific
-                    st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                
-                st.success(f"Fused {len(new_data)} records into pool.")
+                        raw = pd.read_csv(f)
+                        st.caption(f"Ingesting {f.name}...")
+                        new_data = ref.merge(new_data, ref.ingest(raw, sport, "Generic"))
+                    except: st.error(f"Error {f.name}")
+                st.session_state['dfs_pool'] = new_data
+                st.success(f"Loaded {len(new_data)} DFS Players.")
+
+    with c2:
+        st.info("🚀 **PROP UPLOAD (PrizePicks/Underdog)**")
+        prop_source = st.selectbox("Prop Source:", ["PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"], key="prop_src")
+        prop_files = st.file_uploader(f"Upload {prop_source} CSVs", accept_multiple_files=True, key="prop_up")
+        if st.button("🧬 Load Prop Data"):
+            if prop_files:
+                ref = DataRefinery()
+                new_data = pd.DataFrame()
+                for f in prop_files:
+                    try:
+                        raw = pd.read_csv(f)
+                        st.caption(f"Ingesting {f.name}...")
+                        new_data = ref.merge(new_data, ref.ingest(raw, sport, prop_source))
+                    except: st.error(f"Error {f.name}")
+                st.session_state['prop_pool'] = new_data
+                st.success(f"Loaded {len(new_data)} Prop Players.")
     
     if st.button("🛰️ Run AI Scout"):
         st.session_state['ai_intel'] = run_web_scout(sport)
@@ -618,12 +656,12 @@ with tabs[0]:
 
 # --- TAB 2: OPTIMIZER ---
 with tabs[1]:
-    st.markdown("### 🏰 Lineup Generator")
+    st.markdown("### 🏰 Lineup Generator (DFS Only)")
     pool = st.session_state['dfs_pool']
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()] if not pool.empty else pd.DataFrame()
     
     if active.empty:
-        st.warning(f"No DFS data for {sport}. Upload CSV.")
+        st.warning(f"No DFS data found for {sport}. Please use the **Left Uploader** in Tab 1.")
     else:
         if 'value_score' in active.columns:
             top_value = active.sort_values('value_score', ascending=False).head(6)
@@ -682,11 +720,11 @@ with tabs[2]:
 
 # --- TAB 4: PROPS ---
 with tabs[3]:
-    st.markdown("### 🚀 Prop Analyzer")
+    st.markdown("### 🚀 Prop Analyzer (Props Only)")
     pool = st.session_state['prop_pool']
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()].copy() if not pool.empty else pd.DataFrame()
     
-    if active.empty: st.warning(f"No props found for {sport}.")
+    if active.empty: st.warning(f"No prop data found for {sport}. Please use the **Right Uploader** in Tab 1.")
     else:
         brain = TitanBrain(current_bank)
         target_line_col = 'prop_line'
