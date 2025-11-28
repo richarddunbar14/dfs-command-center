@@ -156,7 +156,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (SMART FUSION)
+# 📂 5. DATA REFINERY (STRICT ROUTING)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -185,17 +185,19 @@ class DataRefinery:
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
+        # 🟢 STRICT MAPPINGS
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
             'salary': ['SAL', 'SALARY', 'CAP', 'COST', 'PRICE'],
             'position': ['POS', 'POSITION', 'ROSTER POSITION', 'SLOT'],
             'team': ['TEAM', 'TM', 'SQUAD'],
-            'prop_line': ['LINE', 'O/U', 'PROP', 'TOTAL'],
+            # 🛑 CRITICAL FIX: Removed 'O/U' to prevent Game Totals from being read as Props
+            'prop_line': ['LINE', 'PROP', 'PLAYER PROP', 'STRIKE', 'TOTAL'], 
             'market': ['MARKET NAME', 'MARKET', 'STAT'],
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
             'date': ['DATE', 'GAME DATE'],
-            'time': ['TIME', 'GAME TIME'],
+            'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
             # Factors
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
@@ -203,6 +205,7 @@ class DataRefinery:
             'factor_proj': ["ROTOWIRE PROJECTION FACTOR", "PROJ FACTOR"]
         }
         
+        # 🟢 DEDICATED PLATFORM ROUTING
         site_maps = {
             'prizepicks_line': ['PRIZEPICKS LINE', 'PRIZEPICKS'],
             'underdog_line': ['UNDERDOG LINE', 'UNDERDOG'],
@@ -238,7 +241,7 @@ class DataRefinery:
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
         
-        # Robust Sport Tagging
+        # 🟢 ROBUST SPORT ROUTING
         if 'SPORT' in df.columns: 
             std['sport'] = df['SPORT'].str.strip().str.upper()
         else: 
@@ -257,35 +260,28 @@ class DataRefinery:
         if base.empty: return new_df
         if new_df.empty: return base
         
-        # SMART FUSION: Combine instead of Overwrite
-        # 1. Concatenate all data
+        # 🟢 SMART FUSION LOGIC (Prevents Data Loss)
         combined = pd.concat([base, new_df])
         
-        # 2. Define columns to "Max" (keep highest value found in any file)
-        # This ensures if File A has PrizePicks=25 and File B has PrizePicks=0, we keep 25.
+        # Columns to keep MAX value (so valid lines overwrite 0.0)
         numeric_cols = [
             'projection', 'salary', 'prop_line', 
             'prizepicks_line', 'underdog_line', 'sleeper_line', 'pick6_line',
             'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj', 'spike_score'
         ]
         
-        # 3. Define columns to "Last" (Static info like Team, Position)
+        # Columns to keep LAST value (Metadata)
         meta_cols = ['position', 'team', 'game_info', 'date', 'time']
         
-        # 4. Group by Unique Player+Sport+Market
-        # We assume 'name', 'sport', 'market' is the unique key
-        
-        # Create dictionary for aggregation
         agg_dict = {col: 'max' for col in numeric_cols if col in combined.columns}
         for col in meta_cols:
             if col in combined.columns: agg_dict[col] = 'last'
             
-        # Perform the "Smart Groupby"
         try:
+            # Group by unique identifier (Player + Sport + Market)
             fused = combined.groupby(['name', 'sport', 'market'], as_index=False).agg(agg_dict)
             return fused
         except:
-            # Fallback if aggregation fails
             return combined.drop_duplicates(subset=['name', 'sport', 'market'], keep='last')
 
 # ==========================================
@@ -302,12 +298,11 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (WITH ANALYSIS)
+# 🏭 7. OPTIMIZER
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
     
-    # CAPS
     if site == 'DK': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
     elif site == 'Yahoo': rules['cap'] = 200
@@ -355,7 +350,6 @@ def optimize_lineup(df, config):
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
     
-    # POSITION FILTER
     if config['positions']:
         pool = pool[pool['position'].isin(config['positions'])].reset_index(drop=True)
 
@@ -415,7 +409,7 @@ def get_html_report(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 7.0 (Smart Fusion)")
+st.sidebar.caption("Hydra Edition 7.1 (Routing Verified)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -455,7 +449,7 @@ with tabs[0]:
                 
                 st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
                 st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                st.success(f"Fused {len(new_data)} records using Smart Aggregation.")
+                st.success(f"Fused {len(new_data)} records using Smart Routing.")
     
     if st.button("🛰️ Run AI Scout"):
         st.session_state['ai_intel'] = run_web_scout(sport)
