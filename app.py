@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V8.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V12.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -24,6 +24,7 @@ st.markdown("""
     div[data-testid="stDataFrame"] { border: 1px solid #333; border-radius: 5px; }
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
+    .value-badge { background-color: #00e676; color: black; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,7 +98,7 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN
+# 🧠 4. TITAN BRAIN (ANALYSIS ENGINE)
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
@@ -105,9 +106,7 @@ class TitanBrain:
 
     def calculate_prop_edge(self, row, line_col='prop_line'):
         line = row.get(line_col, 0)
-        # Use fallback if specific line is missing
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
-        
         proj = row.get('projection', 0)
         
         if line <= 0 or proj <= 0: return 0, "No Data", 0.0, "Insufficient Data"
@@ -133,25 +132,30 @@ class TitanBrain:
         
         return units, rating, win_prob * 100, logic_text
 
-    def analyze_lineup(self, lineup_df, sport):
+    def analyze_lineup(self, lineup_df, sport, slate_size):
         msg = []
         stacks = lineup_df['team'].value_counts()
         heavy_stack = stacks[stacks >= 2].index.tolist()
         
-        if heavy_stack: msg.append(f"🔗 **Correlation:** Stacking {', '.join(heavy_stack)}.")
-        else: msg.append(f"🧩 **Structure:** Scatter/Floor Build.")
+        if heavy_stack:
+            msg.append(f"🔗 **Stacked:** {', '.join(heavy_stack)} (Milly Maker Style)")
+        else:
+            msg.append(f"🧩 **Scatter:** Low Correlation")
             
         avg_proj = lineup_df['projection'].mean()
-        msg.append(f"📊 **Avg Proj:** {avg_proj:.1f}")
+        msg.append(f"📊 **Proj:** {avg_proj:.1f}")
         
-        if 'spike_score' in lineup_df.columns:
-            avg_spike = lineup_df['spike_score'].mean()
-            if avg_spike > 70: msg.append(f"🔥 **Upside:** High Spike Potential ({avg_spike:.1f}).")
+        # Slate Context Feedback
+        if slate_size <= 4:
+            if len(heavy_stack) < 1: msg.append("⚠️ **Warning:** Small Slate requires more correlation!")
+        
+        salary_used = lineup_df['salary'].sum()
+        msg.append(f"💰 **Cap:** ${salary_used:,}")
         
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (STRICT ROUTING)
+# 📂 5. DATA REFINERY (INTELLIGENT INGESTION)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -176,11 +180,11 @@ class DataRefinery:
         return p
 
     @staticmethod
-    def ingest(df, sport_tag):
+    def ingest(df, sport_tag, source_tag="Generic"):
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # MAPPINGS (No 'O/U' to prevent Game Total pollution)
+        # MAPPINGS
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
@@ -192,6 +196,9 @@ class DataRefinery:
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
             'date': ['DATE', 'GAME DATE'],
             'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
+            'status': ['STATUS', 'INJURY', 'AVAILABILITY'], 
+            'tm_score': ['TM SCORE', 'IMPLIED TOTAL', 'TEAM TOTAL'], # New for Game Script
+            'game_total': ['O/U', 'GAME TOTAL', 'OVER/UNDER'], # New for Game Script
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
             'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
@@ -208,7 +215,7 @@ class DataRefinery:
         for target, sources in maps.items():
             for s in sources:
                 if s in df.columns:
-                    if target in ['projection', 'salary', 'prop_line', 'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']:
+                    if target in ['projection', 'salary', 'prop_line', 'tm_score', 'game_total', 'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']:
                         std[target] = df[s].apply(DataRefinery.clean_curr)
                     elif target == 'name':
                         std[target] = df[s].astype(str).apply(lambda x: x.split('(')[0].strip())
@@ -228,17 +235,29 @@ class DataRefinery:
         if 'name' not in std.columns: return pd.DataFrame()
         
         defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
-                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD'}
+                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'status':'Active'}
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
         
         if 'SPORT' in df.columns: std['sport'] = df['SPORT'].str.strip().str.upper()
         else: std['sport'] = sport_tag.upper()
         
+        if 'salary' in std.columns and 'projection' in std.columns:
+            std['value_score'] = np.where(std['salary'] > 0, (std['projection'] / std['salary']) * 1000, 0)
+        
         factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
         for f in factors:
             if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
         std['spike_score'] = std[factors].mean(axis=1).fillna(0)
+        
+        if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
+            std['prizepicks_line'] = std['prop_line']
+        elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
+            std['underdog_line'] = std['prop_line']
+        elif source_tag == 'Sleeper' and std['sleeper_line'].sum() == 0:
+            std['sleeper_line'] = std['prop_line']
+        elif source_tag == 'DraftKings Pick6' and std['pick6_line'].sum() == 0:
+            std['pick6_line'] = std['prop_line']
             
         return std
 
@@ -249,11 +268,11 @@ class DataRefinery:
         combined = pd.concat([base, new_df])
         
         numeric_cols = [
-            'projection', 'salary', 'prop_line', 
+            'projection', 'salary', 'prop_line', 'value_score', 'tm_score', 'game_total',
             'prizepicks_line', 'underdog_line', 'sleeper_line', 'pick6_line',
             'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj', 'spike_score'
         ]
-        meta_cols = ['position', 'team', 'game_info', 'date', 'time']
+        meta_cols = ['position', 'team', 'game_info', 'date', 'time', 'status']
         
         agg_dict = {col: 'max' for col in numeric_cols if col in combined.columns}
         for col in meta_cols:
@@ -272,21 +291,19 @@ def run_web_scout(sport):
     intel = {}
     try:
         with DDGS() as ddgs:
-            q = f"{sport} dfs sleepers value plays analysis today"
+            q = f"{sport} dfs winning strategy correlation stacks today"
             for r in list(ddgs.text(q, max_results=5)):
                 intel[(r['title'] + " " + r['body']).lower()] = 1
     except: pass
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (SALARY FIX)
+# 🏭 7. OPTIMIZER (SLATE INTELLIGENCE)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
     
-    # 🛑 SMART CAP LOGIC
     if site in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
-        # Uncapped mode for Pick'em sites
         rules['cap'] = 999999
     elif site == 'DK': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
@@ -324,15 +341,27 @@ def optimize_lineup(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
+    # 🩹 INJURY FILTER
+    if 'status' in pool.columns:
+        pool = pool[~pool['status'].str.contains('Out|IR|NA|Doubtful', case=False, na=False)]
+    
     if pool.empty:
         st.error(f"❌ Pool is empty for {target_sport}.")
         return None
 
-    # 🛑 SALARY CHECK SKIPPER
     pickem_sites = ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']
     if config['site'] not in pickem_sites and pool['salary'].sum() == 0:
-        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer. (Pick'em sites are OK)")
+        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
         return None
+
+    # SLATE CONTEXT
+    unique_games = pool['game_info'].nunique()
+    is_small_slate = unique_games <= 4
+    st.info(f"📊 **Slate Context:** {unique_games} Games detected. Strategy: {'Aggressive/Hyper-Correlated' if is_small_slate else 'Balanced/Standard'}")
+
+    # GAME SCRIPT ADJUSTMENT (Boost players in high total games)
+    if 'tm_score' in pool.columns and config['game_script']:
+        pool['projection'] = np.where(pool['tm_score'] > 24, pool['projection'] * 1.05, pool['projection'])
 
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
@@ -355,12 +384,23 @@ def optimize_lineup(df, config):
 
     rules = get_roster_rules(config['sport'], config['site'], config['mode'])
     lineups = []
+    player_exposure = {i: 0 for i in pool.index}
     
     for i in range(config['count']):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
-        prob += pulp.lpSum([pool.loc[p, 'projection'] * x[p] for p in pool.index])
+        # HISTORICAL SIMULATION WEIGHTING
+        # If player has high hit rate, use less variance (reliable). If low hit rate, more variance (boom/bust).
+        sim_noise = 0.5
+        if 'factor_hit_rate' in pool.columns:
+            # Scale noise: High Hit Rate -> Low Noise (0.1), Low Hit Rate -> High Noise (0.9)
+            sim_noise = 1.0 - (pool['factor_hit_rate'].fillna(50) / 100.0)
+        
+        randomness = np.random.uniform(0, sim_noise, len(pool))
+        
+        prob += pulp.lpSum([(pool.loc[p, 'projection'] + randomness[p]) * x[p] for p in pool.index])
+        
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
         prob += pulp.lpSum([x[p] for p in pool.index]) == rules['size']
         
@@ -374,6 +414,26 @@ def optimize_lineup(df, config):
             l_idx = pool[pool['name'].str.contains(lock, regex=False)].index
             if not l_idx.empty: prob += pulp.lpSum([x[p] for p in l_idx]) >= 1
 
+        # 🧠 SMART STACKING (SLATE DEPENDENT)
+        if config['smart_stack'] and config['sport'] == 'NFL':
+            qbs = pool[pool['pos_id'] == 'QB'].index
+            for qb in qbs:
+                team = pool.loc[qb, 'team']
+                teammates = pool[(pool['team'] == team) & (pool['pos_id'].isin(['WR', 'TE']))].index
+                
+                # Rule 1: Always pair QB with at least 1 WR/TE
+                prob += pulp.lpSum([x[t] for t in teammates]) >= x[qb]
+                
+                # Rule 2: If Small Slate, force Hyper-Correlation (QB + 2 WR/TE)
+                if is_small_slate:
+                     prob += pulp.lpSum([x[t] for t in teammates]) >= 2 * x[qb]
+
+        if config['max_exposure'] < 100:
+            max_lineups = max(1, int(config['count'] * (config['max_exposure'] / 100.0)))
+            for p_idx in pool.index:
+                if player_exposure[p_idx] >= max_lineups:
+                    prob += x[p_idx] == 0
+
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
         if prob.status == 1:
@@ -381,6 +441,7 @@ def optimize_lineup(df, config):
             lu = pool.loc[sel].copy()
             lu['Lineup_ID'] = i+1
             lineups.append(lu)
+            for p in sel: player_exposure[p] += 1
             prob += pulp.lpSum([x[p] for p in sel]) <= rules['size'] - 1
             
     return pd.concat(lineups) if lineups else None
@@ -391,12 +452,15 @@ def get_html_report(df):
         html += f"<div><b>{row['name']}</b> ({row['position']}) | Sal: ${row['salary']} | Proj: {row['projection']:.1f}</div>"
     return base64.b64encode(html.encode()).decode()
 
+def get_csv_download(df):
+    return df.to_csv(index=False).encode('utf-8')
+
 # ==========================================
 # 🖥️ 8. DASHBOARD
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 8.0 (Fully Bolted)")
+st.sidebar.caption("Hydra Edition 12.0 (Slate Intelligence)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -421,7 +485,9 @@ with tabs[0]:
                     cached_api_fetch(sport, API_KEY)
                     st.success("Sync Complete")
     with col_file:
-        files = st.file_uploader("Upload CSVs", accept_multiple_files=True)
+        source_tag = st.selectbox("🏷️ Select Source for Upload:", ["Generic/Combined", "PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
+        files = st.file_uploader(f"Upload {source_tag} CSVs", accept_multiple_files=True)
+        
         if st.button("🧬 Fuse Files"):
             if files:
                 ref = DataRefinery()
@@ -430,13 +496,13 @@ with tabs[0]:
                     try:
                         try: raw = pd.read_csv(f, encoding='utf-8-sig')
                         except: raw = pd.read_excel(f)
-                        st.caption(f"Ingesting {f.name}...")
-                        new_data = ref.merge(new_data, ref.ingest(raw, sport))
+                        st.caption(f"Ingesting {f.name} as {source_tag}...")
+                        new_data = ref.merge(new_data, ref.ingest(raw, sport, source_tag))
                     except Exception as e: st.error(f"Error {f.name}: {e}")
                 
                 st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
                 st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                st.success(f"Fused {len(new_data)} records using Smart Routing.")
+                st.success(f"Fused {len(new_data)} records. Tagged as {source_tag}.")
     
     if st.button("🛰️ Run AI Scout"):
         st.session_state['ai_intel'] = run_web_scout(sport)
@@ -451,41 +517,56 @@ with tabs[1]:
     if active.empty:
         st.warning(f"No data for {sport}. Please Upload CSV.")
     else:
-        # Warn if using DK/FD without salary, but allow if Pick'em
-        if active['salary'].sum() == 0 and site not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
-             st.warning("⚠️ No Salaries found. Optimizer requires salaries for DK/FD/Yahoo.")
-        
+        # 🟢 BEST PLAYS (VALUE ENGINE)
+        if 'value_score' in active.columns:
+            top_value = active.sort_values('value_score', ascending=False).head(6)
+            st.markdown("##### 💎 Core Plays (Best Value/Salary)")
+            cols = st.columns(6)
+            for i, (idx, row) in enumerate(top_value.iterrows()):
+                cols[i].metric(row['name'], f"${row['salary']}", f"{row['value_score']:.1f}x")
+
         games = sorted(active['game_info'].astype(str).unique())
         slate = st.multiselect("🗓️ Filter Slate", games, default=games)
         
-        all_pos = sorted(active['position'].unique())
-        pos_filter = st.multiselect("🛡️ Filter Positions (Optional)", all_pos)
-        
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         mode = c1.radio("Mode", ["Classic", "Showdown"])
         count = c2.slider("Lineups", 1, 50, 10)
-        locks = st.multiselect("Lock", sorted(active['name'].unique()))
+        
+        # 🟢 STRATEGY PANEL
+        with st.expander("🧠 Milly Maker Strategy", expanded=True):
+            smart_stack = st.checkbox("Milly Maker Logic (Correlation + Bring Back)", value=True)
+            game_script = st.checkbox("Game Script Boost (High Totals)", value=True)
+            max_exposure = st.slider("Max Player Exposure %", 10, 100, 60)
+            locks = st.multiselect("Lock Players", sorted(active['name'].unique()))
+            pos_filter = st.multiselect("Filter Positions", sorted(active['position'].unique()))
         
         if st.button("⚡ Generate & Analyze"):
-            cfg = {'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':[], 'slate_games':slate, 'sim':False, 'positions':pos_filter}
+            cfg = {
+                'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':[], 
+                'slate_games':slate, 'sim':False, 'positions':pos_filter,
+                'smart_stack': smart_stack, 'game_script': game_script, 'max_exposure': max_exposure
+            }
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             
             if res is not None:
                 st.dataframe(res)
                 top_lu = res[res['Lineup_ID']==1]
                 brain = TitanBrain(current_bank)
-                feedback = brain.analyze_lineup(top_lu, sport)
-                st.info(f"💡 **Titan Analysis (Lineup 1):** {feedback}")
-                st.markdown(f'<a href="data:text/html;base64,{get_html_report(res)}" download="report.html">📥 Download Cheat Sheet</a>', unsafe_allow_html=True)
+                slate_size = len(slate) if slate else len(games)
+                feedback = brain.analyze_lineup(top_lu, sport, slate_size)
+                st.info(f"💡 **Lineup 1 Analysis:** {feedback}")
+                
+                csv_data = get_csv_download(res)
+                st.download_button("📥 Export CSV", data=csv_data, file_name="titan_lineups.csv", mime="text/csv")
             else:
-                st.error("Optimization Failed (Check Constraints).")
+                st.error("Optimization Failed. Try loosening exposure limits.")
 
 # --- TAB 3: SIMULATION ---
 with tabs[2]:
     st.markdown("### 🔮 Monte Carlo Simulation")
     if st.button("🎲 Run Simulation (50 Lineups)"):
         with st.spinner("Simulating..."):
-            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[], 'positions':[]}
+            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[], 'positions':[], 'smart_stack':False, 'game_script':False, 'max_exposure':100}
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             if res is not None:
                 exp = res['name'].value_counts(normalize=True).mul(100).reset_index()
@@ -506,7 +587,7 @@ with tabs[3]:
         elif site == 'PrizePicks': target_line_col = 'prizepicks_line'
         elif site == 'DraftKings Pick6': target_line_col = 'pick6_line'
         
-        st.caption(f"🔎 Using Line Source: **{target_line_col.replace('_',' ').title()}** (Fallback to Generic)")
+        st.info(f"🔎 Analyzing for **{site}**. Using column: `{target_line_col}`.")
         
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
@@ -522,7 +603,6 @@ with tabs[3]:
         show_spikes = st.checkbox("🔥 Show Only 'Spiked' Players (High Factor Score)")
         if show_spikes:
             valid = valid[valid['spike_score'] > 75]
-            st.caption("Showing players with High Hit Rates or Factor Scores > 75")
         
         cols = ['date', 'time', 'name', 'market', 'team', 'final_line', 'projection', 'pick', 'win_prob', 'rating', 'titan_logic', 'spike_score']
         final_cols = [c for c in cols if c in valid.columns]
