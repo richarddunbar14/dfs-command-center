@@ -15,7 +15,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V30.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V31.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -26,6 +26,7 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
     .value-badge { background-color: #00e676; color: black; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
+    .sharp-badge { background-color: #d500f9; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,6 +47,7 @@ class MultiVerseGateway:
     def fetch_data(self, sport):
         data = []
         try:
+            # --- NBA ---
             if sport == 'NBA':
                 url = "https://api-nba-v1.p.rapidapi.com/games"
                 self.headers["X-RapidAPI-Host"] = "api-nba-v1.p.rapidapi.com"
@@ -55,6 +57,7 @@ class MultiVerseGateway:
                     for g in res.json().get('response', []):
                         matchup = f"{g['teams']['visitors']['code']} @ {g['teams']['home']['code']}"
                         data.append({'game_info': matchup, 'sport': 'NBA'})
+            # --- NFL ---
             elif sport == 'NFL':
                 url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
                 self.headers["X-RapidAPI-Host"] = "tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com"
@@ -100,13 +103,14 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN
+# 🧠 4. TITAN BRAIN (ANALYSIS ENGINE)
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
         self.bankroll = bankroll
 
     def apply_strategic_boosts(self, row, sport):
+        # CRITICAL FIX: Safe Get
         proj = row.get('projection', 0.0)
         notes = []
         
@@ -142,7 +146,7 @@ class TitanBrain:
                     notes.append("🔴 Tough Matchup")
                 
         except Exception:
-            pass
+            pass # Fail gracefully
 
         return proj, " | ".join(notes)
 
@@ -211,7 +215,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (CRASH PROOF)
+# 📂 5. DATA REFINERY
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -230,8 +234,8 @@ class DataRefinery:
         if 'RECEIVER' in p: return 'WR'
         if 'TIGHT' in p: return 'TE'
         if 'DEF' in p or 'DST' in p: return 'DST'
-        if 'GUARD' in p: return 'G'
-        if 'FORWARD' in p: return 'F'
+        if 'GUARD' in p or 'G/UTIL' in p: return 'G' # CBB Fix
+        if 'FORWARD' in p or 'F/UTIL' in p: return 'F' # CBB Fix
         if 'CENTER' in p: return 'C'
         if 'LEFT WING' in p: return 'LW'
         if 'RIGHT WING' in p: return 'RW'
@@ -318,7 +322,6 @@ class DataRefinery:
         
         factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
         valid_factors = [f for f in factors if f in std.columns]
-        
         if valid_factors:
             for f in valid_factors:
                 std[f] = pd.to_numeric(std[f], errors='coerce')
@@ -326,6 +329,7 @@ class DataRefinery:
         else:
             std['spike_score'] = 0.0 
         
+        # Smart Tagging
         if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
             std['prizepicks_line'] = std['prop_line']
         elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
@@ -380,7 +384,7 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (DFS)
+# 🏭 7. OPTIMIZER (ALL SPORTS)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
@@ -423,6 +427,11 @@ def get_roster_rules(sport, site, mode):
             rules['constraints'] = [('C', 2, 3), ('W', 3, 4), ('D', 2, 3), ('G', 1, 1)]
     elif sport == 'PGA':
         rules['size'] = 6
+    # 🏀 CBB ADDED
+    elif sport == 'CBB':
+        if site == 'DK':
+            rules['size'] = 8
+            rules['constraints'] = [('G', 3, 5), ('F', 3, 5)] 
 
     if rules['size'] == 0: rules['size'] = 6
     return rules
@@ -431,7 +440,7 @@ def optimize_lineup(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
-    if config['site'] not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']:
+    if config['site'] not in ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6'] and not config['ignore_salary']:
         pool = pool[pool['salary'] > 0]
     
     if 'status' in pool.columns:
@@ -447,6 +456,12 @@ def optimize_lineup(df, config):
     unique_games = pool['game_info'].nunique()
     is_small_slate = unique_games <= 4
     st.info(f"📊 **Slate Context:** {unique_games} Games. Strategy: {'Aggressive' if is_small_slate else 'Standard'}")
+
+    if 'tm_score' in pool.columns and config['game_script']:
+        pool['projection'] = np.where(pool['tm_score'] > 24, pool['projection'] * 1.05, pool['projection'])
+
+    if 'rst_own' in pool.columns and config['chalk_fade'] > 0:
+        pool['projection'] = np.where(pool['rst_own'] > 25, pool['projection'] * (1 - config['chalk_fade']/100.0), pool['projection'])
 
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
@@ -529,9 +544,7 @@ def optimize_slips(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
-    # 🟢 FORCE PROJECTION COLUMN IF MISSING
-    if 'projection' not in pool.columns:
-        pool['projection'] = 0.0
+    if 'projection' not in pool.columns: pool['projection'] = 0.0
     
     line_col = 'prop_line'
     if config['book'] == 'PrizePicks': line_col = 'prizepicks_line'
@@ -541,7 +554,6 @@ def optimize_slips(df, config):
     
     brain = TitanBrain(0)
     
-    # 🟢 SAFE APPLY
     try:
         applied = pool.apply(lambda row: brain.apply_strategic_boosts(row, target_sport), axis=1)
         pool['smart_projection'] = applied.apply(lambda x: x[0])
@@ -575,10 +587,15 @@ def optimize_slips(df, config):
     for i in range(config['count']):
         current_slip = []
         slip_players = set()
+        slip_teams = set()
         
         for idx, row in pool.iterrows():
             if len(current_slip) >= config['legs']: break
             if row['name'] in slip_players: continue 
+            
+            # 🧩 CORRELATION BOOST
+            if config['correlation'] and row['team'] in slip_teams:
+                 row['opt_score'] *= 1.1 
             
             line = row[line_col] if row[line_col] > 0 else row['prop_line']
             proj = row['smart_projection']
@@ -590,6 +607,7 @@ def optimize_slips(df, config):
             }
             current_slip.append(prop_data)
             slip_players.add(row['name'])
+            slip_teams.add(row['team'])
             
         if len(current_slip) == config['legs']:
             slips.append(pd.DataFrame(current_slip))
@@ -607,7 +625,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 30.0 (Final)")
+st.sidebar.caption("Hydra Edition 31.0 (The Architect)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -615,10 +633,10 @@ except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
 current_bank = get_bankroll(conn)
 st.sidebar.metric("🏦 Bankroll", f"${current_bank:,.2f}")
 
-sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2"])
+sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2", "CBB"])
 site = st.sidebar.selectbox("Site/Book", ["DK", "FD", "Yahoo", "PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
 
-tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay", "6. 🧩 Prop Opt"])
+tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay", "6. 🧩 Prop Opt", "7. ⚖️ Arbitrage", "8. 🎬 Scenarios", "9. 👁️ Vision"])
 
 # --- TAB 1: DATA ---
 with tabs[0]:
@@ -707,6 +725,7 @@ with tabs[1]:
             game_script = st.checkbox("Game Script Boost (High Totals)", value=True)
             chalk_fade = st.slider("Chalk Fade %", 0, 50, 0)
             max_exposure = st.slider("Max Player Exposure %", 10, 100, 60)
+            ignore_salary = st.checkbox("⚠️ Ignore Salary Cap (For Testing)", value=False)
             locks = st.multiselect("Lock Players", sorted(active['name'].unique()))
             pos_filter = st.multiselect("Filter Positions", sorted(active['position'].unique()))
         
@@ -715,7 +734,7 @@ with tabs[1]:
                 'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':[], 
                 'slate_games':slate, 'sim':False, 'positions':pos_filter,
                 'smart_stack': smart_stack, 'game_script': game_script, 'max_exposure': max_exposure,
-                'chalk_fade': chalk_fade
+                'chalk_fade': chalk_fade, 'ignore_salary': ignore_salary
             }
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             
@@ -735,9 +754,10 @@ with tabs[1]:
 # --- TAB 3: SIMULATION ---
 with tabs[2]:
     st.markdown("### 🔮 Monte Carlo Simulation")
-    if st.button("🎲 Run Simulation (50 Lineups)"):
+    if st.button("🎲 Run Simulation (200 Lineups)"):
         with st.spinner("Simulating..."):
-            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[], 'positions':[], 'smart_stack':False, 'game_script':False, 'max_exposure':100, 'chalk_fade':0}
+            sim_count = st.slider("Sim Count", 50, 1000, 200)
+            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':sim_count, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[], 'positions':[], 'smart_stack':False, 'game_script':False, 'max_exposure':100, 'chalk_fade':0, 'ignore_salary':False}
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             if res is not None:
                 exp = res['name'].value_counts(normalize=True).mul(100).reset_index()
@@ -831,6 +851,10 @@ with tabs[4]:
 with tabs[5]:
     st.markdown("### 🧩 Prop Slip Optimizer")
     pool = st.session_state['prop_pool']
+    
+    valid_props_count = len(pool) if not pool.empty else 0
+    st.caption(f"Status: {valid_props_count} Valid Props Available")
+    
     if pool.empty:
         st.warning("No props loaded.")
     else:
@@ -838,15 +862,98 @@ with tabs[5]:
         book_select = c1.selectbox("Sportsbook", ["PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6"])
         legs = c2.slider("Legs (Picks per Slip)", 2, 8, 5)
         num_slips = c3.slider("Number of Slips", 1, 10, 3)
+        corr_boost = st.checkbox("Boost Correlation (Same Team)", value=True)
+        
+        wager = st.number_input("Wager Amount ($)", value=20)
         
         if st.button("⚡ Optimize Slips"):
-            cfg = {'sport':sport, 'book':book_select, 'legs':legs, 'count':num_slips}
+            cfg = {'sport':sport, 'book':book_select, 'legs':legs, 'count':num_slips, 'correlation':corr_boost}
             slips = optimize_slips(pool, cfg)
             
             if slips:
                 for i, slip in enumerate(slips):
-                    st.subheader(f"🎫 Slip #{i+1}")
+                    brain = TitanBrain(0)
+                    win_prob_slip, payout, exp_ret, roi = brain.calculate_slip_ev(slip, book_select, wager)
+                    
+                    st.markdown(f"#### 🎫 Slip #{i+1} | Payout: {payout}x | ROI: {roi:.1f}%")
+                    st.caption(f"Bet: ${wager} ➡️ Potential Win: ${wager*payout:.2f} | **Expected Value: ${exp_ret:.2f}**")
+                    
+                    if exp_ret > 0:
+                        st.success("✅ **POSITIVE EV - Recommended Bet**")
+                    else:
+                        st.error("❌ **NEGATIVE EV - Do Not Bet**")
+                        
                     st.table(slip)
                     st.divider()
             else:
                 st.error("Could not generate valid slips. Check data pool.")
+
+# --- TAB 7: ARBITRAGE HUNTER ---
+with tabs[6]:
+    st.markdown("### ⚖️ Arbitrage / Middle Hunter")
+    pool = st.session_state['prop_pool']
+    if pool.empty: st.warning("Load Props first.")
+    else:
+        st.caption("Scanning for line discrepancies > 1.0...")
+        arbs = []
+        for idx, row in pool.iterrows():
+            lines = {
+                'PrizePicks': row.get('prizepicks_line', 0),
+                'Underdog': row.get('underdog_line', 0),
+                'Sleeper': row.get('sleeper_line', 0)
+            }
+            valid_lines = {k: v for k, v in lines.items() if v > 0}
+            if len(valid_lines) > 1:
+                min_val = min(valid_lines.values())
+                max_val = max(valid_lines.values())
+                if (max_val - min_val) >= 1.0:
+                    arbs.append({
+                        'Player': row['name'],
+                        'Market': row['market'],
+                        'Min Line': min_val,
+                        'Max Line': max_val,
+                        'Gap': max_val - min_val,
+                        'Strategy': f"Bet OVER {min_val} / UNDER {max_val}"
+                    })
+        
+        if arbs:
+            st.success(f"Found {len(arbs)} Arbitrage Opportunities!")
+            st.dataframe(pd.DataFrame(arbs))
+        else:
+            st.info("No arbitrage opportunities found in current pool.")
+
+# --- TAB 8: SCENARIO BUILDER ---
+with tabs[7]:
+    st.markdown("### 🎬 Scenario Builder")
+    pool = st.session_state['dfs_pool']
+    if pool.empty: st.warning("Load DFS Pool first.")
+    else:
+        teams = sorted(pool['team'].unique())
+        selected_team = st.selectbox("Select Winning Team:", teams)
+        margin = st.slider("Predicted Margin of Victory", 1, 30, 7)
+        
+        if st.button("Apply Scenario"):
+            pool.loc[pool['team'] == selected_team, 'projection'] *= 1.05
+            st.success(f"Applied scenario: {selected_team} wins by {margin}+ points. Projections updated.")
+            st.dataframe(pool[pool['team'] == selected_team].head())
+
+# --- TAB 9: VISION (VISUALS) ---
+with tabs[8]:
+    st.markdown("### 👁️ Titan Vision")
+    
+    viz_choice = st.radio("Visualize:", ["DFS Value", "Prop Edge"], horizontal=True)
+    
+    if viz_choice == "DFS Value":
+        if not st.session_state['dfs_pool'].empty:
+            df = st.session_state['dfs_pool']
+            fig = px.scatter(df, x="salary", y="projection", color="position", hover_data=["name"], title="Salary vs Projection (Value Finder)")
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.warning("Load DFS Data")
+        
+    elif viz_choice == "Prop Edge":
+        if not st.session_state['prop_pool'].empty:
+            df = st.session_state['prop_pool'].copy()
+            df['edge'] = (df['projection'] - df['prop_line']).abs() / df['prop_line']
+            fig = px.scatter(df, x="edge", y="projection", color="market", hover_data=["name", "prop_line"], title="Edge Magnitude vs Projection")
+            st.plotly_chart(fig, use_container_width=True)
+        else: st.warning("Load Prop Data")
