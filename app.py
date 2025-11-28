@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V12.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V12.1", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -145,9 +145,8 @@ class TitanBrain:
         avg_proj = lineup_df['projection'].mean()
         msg.append(f"📊 **Proj:** {avg_proj:.1f}")
         
-        # Slate Context Feedback
-        if slate_size <= 4:
-            if len(heavy_stack) < 1: msg.append("⚠️ **Warning:** Small Slate requires more correlation!")
+        if slate_size <= 4 and len(heavy_stack) < 1: 
+            msg.append("⚠️ **Warning:** Small Slate requires more correlation!")
         
         salary_used = lineup_df['salary'].sum()
         msg.append(f"💰 **Cap:** ${salary_used:,}")
@@ -155,7 +154,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (INTELLIGENT INGESTION)
+# 📂 5. DATA REFINERY (STRICT ROUTING)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -184,7 +183,6 @@ class DataRefinery:
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # MAPPINGS
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
@@ -197,8 +195,8 @@ class DataRefinery:
             'date': ['DATE', 'GAME DATE'],
             'time': ['TIME', 'GAME TIME', 'TIME (ET)'],
             'status': ['STATUS', 'INJURY', 'AVAILABILITY'], 
-            'tm_score': ['TM SCORE', 'IMPLIED TOTAL', 'TEAM TOTAL'], # New for Game Script
-            'game_total': ['O/U', 'GAME TOTAL', 'OVER/UNDER'], # New for Game Script
+            'tm_score': ['TM SCORE', 'IMPLIED TOTAL', 'TEAM TOTAL'], 
+            'game_total': ['O/U', 'GAME TOTAL', 'OVER/UNDER'],
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
             'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
@@ -298,7 +296,7 @@ def run_web_scout(sport):
     return intel
 
 # ==========================================
-# 🏭 7. OPTIMIZER (SLATE INTELLIGENCE)
+# 🏭 7. OPTIMIZER (FIXED & STRATEGIC)
 # ==========================================
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
@@ -354,12 +352,12 @@ def optimize_lineup(df, config):
         st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
         return None
 
-    # SLATE CONTEXT
+    # SLATE CONTEXT (FIXED DEFINITION)
     unique_games = pool['game_info'].nunique()
     is_small_slate = unique_games <= 4
     st.info(f"📊 **Slate Context:** {unique_games} Games detected. Strategy: {'Aggressive/Hyper-Correlated' if is_small_slate else 'Balanced/Standard'}")
 
-    # GAME SCRIPT ADJUSTMENT (Boost players in high total games)
+    # GAME SCRIPT
     if 'tm_score' in pool.columns and config['game_script']:
         pool['projection'] = np.where(pool['tm_score'] > 24, pool['projection'] * 1.05, pool['projection'])
 
@@ -390,13 +388,9 @@ def optimize_lineup(df, config):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
-        # HISTORICAL SIMULATION WEIGHTING
-        # If player has high hit rate, use less variance (reliable). If low hit rate, more variance (boom/bust).
         sim_noise = 0.5
         if 'factor_hit_rate' in pool.columns:
-            # Scale noise: High Hit Rate -> Low Noise (0.1), Low Hit Rate -> High Noise (0.9)
             sim_noise = 1.0 - (pool['factor_hit_rate'].fillna(50) / 100.0)
-        
         randomness = np.random.uniform(0, sim_noise, len(pool))
         
         prob += pulp.lpSum([(pool.loc[p, 'projection'] + randomness[p]) * x[p] for p in pool.index])
@@ -421,12 +415,19 @@ def optimize_lineup(df, config):
                 team = pool.loc[qb, 'team']
                 teammates = pool[(pool['team'] == team) & (pool['pos_id'].isin(['WR', 'TE']))].index
                 
-                # Rule 1: Always pair QB with at least 1 WR/TE
+                # Basic Rule: QB + 1 WR/TE
                 prob += pulp.lpSum([x[t] for t in teammates]) >= x[qb]
                 
-                # Rule 2: If Small Slate, force Hyper-Correlation (QB + 2 WR/TE)
+                # Small Slate Rule: Force Hyper-Correlation (QB + 2 WR/TE)
                 if is_small_slate:
                      prob += pulp.lpSum([x[t] for t in teammates]) >= 2 * x[qb]
+
+        # 🧠 NBA ANTI-CORRELATION
+        if config['smart_stack'] and config['sport'] == 'NBA':
+            teams = pool['team'].unique()
+            for t in teams:
+                t_idx = pool[pool['team'] == t].index
+                prob += pulp.lpSum([x[p] for p in t_idx]) <= 4
 
         if config['max_exposure'] < 100:
             max_lineups = max(1, int(config['count'] * (config['max_exposure'] / 100.0)))
@@ -460,7 +461,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 12.0 (Slate Intelligence)")
+st.sidebar.caption("Hydra Edition 12.1 (Fix + Logic)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -517,7 +518,6 @@ with tabs[1]:
     if active.empty:
         st.warning(f"No data for {sport}. Please Upload CSV.")
     else:
-        # 🟢 BEST PLAYS (VALUE ENGINE)
         if 'value_score' in active.columns:
             top_value = active.sort_values('value_score', ascending=False).head(6)
             st.markdown("##### 💎 Core Plays (Best Value/Salary)")
@@ -532,7 +532,6 @@ with tabs[1]:
         mode = c1.radio("Mode", ["Classic", "Showdown"])
         count = c2.slider("Lineups", 1, 50, 10)
         
-        # 🟢 STRATEGY PANEL
         with st.expander("🧠 Milly Maker Strategy", expanded=True):
             smart_stack = st.checkbox("Milly Maker Logic (Correlation + Bring Back)", value=True)
             game_script = st.checkbox("Game Script Boost (High Totals)", value=True)
