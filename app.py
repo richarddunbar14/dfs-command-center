@@ -21,13 +21,11 @@ st.markdown("""
     /* THEME: Deep Space & Neon Blue */
     .stApp { background-color: #050505; color: #e0e0e0; font-family: 'Roboto Mono', monospace; }
     
-    /* CARDS */
+    /* CARDS & DATAFRAMES */
     .titan-card { 
         background: #111; border: 1px solid #333; padding: 15px; border-radius: 8px; 
         box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 10px; border-left: 4px solid #29b6f6;
     }
-    
-    /* DATAFRAME STYLING */
     div[data-testid="stDataFrame"] { border: 1px solid #333; border-radius: 5px; }
     
     /* BUTTONS */
@@ -39,13 +37,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Session State Initialization
+# Session State
 if 'dfs_pool' not in st.session_state: st.session_state['dfs_pool'] = pd.DataFrame()
 if 'prop_pool' not in st.session_state: st.session_state['prop_pool'] = pd.DataFrame()
 if 'api_log' not in st.session_state: st.session_state['api_log'] = []
+if 'ai_intel' not in st.session_state: st.session_state['ai_intel'] = {}
 
 # ==========================================
-# 📡 2. MULTI-VERSE API ROUTER
+# 📡 2. MULTI-VERSE API ROUTER (FULL)
 # ==========================================
 
 class MultiVerseGateway:
@@ -67,6 +66,7 @@ class MultiVerseGateway:
                     games = res.json().get('response', [])
                     for g in games:
                         data.append({'game': f"{g['teams']['home']['code']} vs {g['teams']['visitors']['code']}", 'sport': 'NBA'})
+            
             # --- NFL ---
             elif sport == 'NFL':
                 url = "https://tank01-nfl-live-in-game-real-time-statistics-nfl.p.rapidapi.com/getDailyGameList"
@@ -77,7 +77,35 @@ class MultiVerseGateway:
                     games = res.json().get('body', [])
                     for g in games:
                         data.append({'game': g.get('gameID'), 'sport': 'NFL'})
-            # Add other sports as needed...
+
+            # --- MLB ---
+            elif sport == 'MLB':
+                url = "https://tank01-mlb-live-in-game-real-time-statistics.p.rapidapi.com/getDailyGameList"
+                self.headers["X-RapidAPI-Host"] = "tank01-mlb-live-in-game-real-time-statistics.p.rapidapi.com"
+                params = {"gameDate": datetime.now().strftime("%Y%m%d")}
+                res = requests.get(url, headers=self.headers, params=params)
+
+            # --- SOCCER ---
+            elif sport == 'SOCCER':
+                url = "https://api-football-v1.p.rapidapi.com/v3/fixtures"
+                self.headers["X-RapidAPI-Host"] = "api-football-v1.p.rapidapi.com"
+                params = {"date": datetime.now().strftime("%Y-%m-%d")}
+                res = requests.get(url, headers=self.headers, params=params)
+
+            # --- TENNIS ---
+            elif sport == 'TENNIS':
+                url = "https://tennis-api-atp-wta-itf.p.rapidapi.com/tennis/v2/schedule"
+                self.headers["X-RapidAPI-Host"] = "tennis-api-atp-wta-itf.p.rapidapi.com"
+                params = {"date": datetime.now().strftime("%Y-%m-%d")}
+                res = requests.get(url, headers=self.headers, params=params)
+
+            # --- PGA ---
+            elif sport == 'PGA':
+                url = "https://live-golf-data.p.rapidapi.com/schedules"
+                self.headers["X-RapidAPI-Host"] = "live-golf-data.p.rapidapi.com"
+                params = {"year": str(datetime.now().year)}
+                res = requests.get(url, headers=self.headers, params=params)
+
         except Exception as e:
             log_msg = f"Error: {e}"
 
@@ -131,21 +159,16 @@ class TitanBrain:
         self.bankroll = bankroll
 
     def calculate_prop_edge(self, row, line_col='prop_line'):
-        # Get the specific line for the selected site, or fallback to generic
         line = row.get(line_col, 0)
-        # If specific line is missing (0), use the generic 'prop_line'
         if line == 0 or pd.isna(line): line = row.get('prop_line', 0)
-        
         proj = row.get('projection', 0)
         
         if line <= 0 or proj <= 0: return 0, "No Data", 0.0
         
         edge_raw = abs(proj - line) / line
-        # Win probability formula
         win_prob = min(0.78, 0.52 + (edge_raw * 0.55))
         
-        # Kelly Criterion for Bankroll Management
-        odds = 0.909 # Standard -110 odds implied
+        odds = 0.909
         kelly = ((odds * win_prob) - (1 - win_prob)) / odds
         units = max(0, kelly * 0.3) * 100 
         
@@ -157,7 +180,7 @@ class TitanBrain:
         return units, rating, win_prob * 100
 
 # ==========================================
-# 📂 5. DATA REFINERY (UPDATED FOR FACTORS & DATES)
+# 📂 5. DATA REFINERY (FULL)
 # ==========================================
 
 class DataRefinery:
@@ -171,30 +194,29 @@ class DataRefinery:
 
     @staticmethod
     def ingest(df, sport_tag):
-        # Normalize columns to uppercase for easier matching
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # 1. BASIC FIELDS MAPPING
+        # Mappings
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
             'salary': ['SAL', 'SALARY', 'CAP', 'COST'],
             'position': ['POS', 'POSITION', 'ROSTER POSITION'],
             'team': ['TEAM', 'TM', 'SQUAD'],
-            'prop_line': ['LINE', 'O/U', 'PROP', 'STRIKE', 'TOTAL'], # Generic Line
+            'prop_line': ['LINE', 'O/U', 'PROP', 'STRIKE', 'TOTAL'],
             'market': ['MARKET NAME', 'MARKET', 'PROP TYPE', 'STAT'],
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
             'date': ['DATE', 'GAME DATE'],
             'time': ['TIME', 'GAME TIME'],
-            # "Far Cry" Specs (Factors)
+            # Factors
             'factor_pickem': ["DFS PICK'EM SITES FACTOR", "PICK'EM FACTOR"],
             'factor_sportsbook': ["SPORTSBOOKS FACTOR", "BOOKS FACTOR"],
             'factor_hit_rate': ["HIT RATE FACTOR", "HIT RATE"],
             'factor_proj': ["ROTOWIRE PROJECTION FACTOR", "PROJ FACTOR"]
         }
         
-        # 2. SITE SPECIFIC LINES MAPPING
+        # Site Lines
         site_maps = {
             'prizepicks_line': ['PRIZEPICKS LINE', 'PRIZEPICKS'],
             'underdog_line': ['UNDERDOG LINE', 'UNDERDOG'],
@@ -202,7 +224,6 @@ class DataRefinery:
             'pick6_line': ['DRAFTKINGS PICK6 LINE', 'PICK6 LINE', 'PICK6']
         }
         
-        # Ingest Basic Fields
         for target, sources in maps.items():
             for s in sources:
                 if s in df.columns:
@@ -214,7 +235,6 @@ class DataRefinery:
                         std[target] = df[s].astype(str).str.strip()
                     break
         
-        # Ingest Site Specific Lines
         for target, sources in site_maps.items():
             for s in sources:
                 if s in df.columns:
@@ -224,22 +244,14 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
-        # Set Defaults if missing
-        if 'projection' not in std.columns: std['projection'] = 0.0
-        if 'salary' not in std.columns: std['salary'] = 0.0
-        if 'prop_line' not in std.columns: std['prop_line'] = 0.0
-        if 'position' not in std.columns: std['position'] = 'FLEX'
-        if 'team' not in std.columns: std['team'] = 'N/A'
-        if 'market' not in std.columns: std['market'] = 'Standard'
-        if 'game_info' not in std.columns: std['game_info'] = 'All Games'
-        if 'date' not in std.columns: std['date'] = datetime.now().strftime("%Y-%m-%d")
-        if 'time' not in std.columns: std['time'] = "TBD"
+        # Defaults
+        defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
+                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD'}
+        for k,v in defaults.items():
+            if k not in std.columns: std[k] = v
         
-        # Sport Detection
-        if 'SPORT' in df.columns:
-            std['sport'] = df['SPORT'].str.strip().str.upper()
-        else:
-            std['sport'] = sport_tag.upper()
+        if 'SPORT' in df.columns: std['sport'] = df['SPORT'].str.strip().str.upper()
+        else: std['sport'] = sport_tag.upper()
             
         return std
 
@@ -247,27 +259,46 @@ class DataRefinery:
     def merge(base, new_df):
         if base.empty: return new_df
         if new_df.empty: return base
-        # Merge key: Name + Market + Sport to avoid duplicates but keep different props
         return pd.concat([base, new_df]).drop_duplicates(subset=['name', 'sport', 'market'], keep='last').reset_index(drop=True)
 
 # ==========================================
-# 🏭 7. OPTIMIZER
+# 📡 6. AI SCOUT (RESTORED)
+# ==========================================
+
+def run_web_scout(sport):
+    intel = {}
+    try:
+        with DDGS() as ddgs:
+            q = f"{sport} dfs sleepers value plays analysis today"
+            for r in list(ddgs.text(q, max_results=5)):
+                blob = (r['title'] + " " + r['body']).lower()
+                intel[blob] = 1
+    except: pass
+    return intel
+
+# ==========================================
+# 🏭 7. OPTIMIZER & SIMULATION
 # ==========================================
 
 def get_roster_rules(sport, site, mode):
     rules = {'size': 0, 'cap': 50000, 'constraints': []}
-    
-    # Cap logic
     if site == 'DK' or site == 'DraftKings Pick6': rules['cap'] = 50000
     elif site == 'FD': rules['cap'] = 60000
     elif site == 'Yahoo': rules['cap'] = 200
 
-    # NFL Rules
+    if mode == 'Showdown':
+        if site == 'DK':
+            rules['size'] = 6
+            rules['constraints'].append(('CPT', 1, 1))
+        elif site == 'FD':
+            rules['size'] = 5
+            rules['constraints'].append(('MVP', 1, 1))
+        return rules
+
     if sport == 'NFL':
         rules['size'] = 9
         if site == 'DK': rules['constraints'] = [('QB', 1, 1), ('DST', 1, 1), ('RB', 2, 3), ('WR', 3, 4), ('TE', 1, 2), ('RB|WR|TE', 7, 7)]
         elif site == 'FD': rules['constraints'] = [('QB', 1, 1), ('DEF', 1, 1), ('RB', 2, 3), ('WR', 3, 4), ('TE', 1, 2), ('RB|WR|TE', 7, 7)]
-    # NBA Rules
     elif sport == 'NBA':
         if site == 'DK':
             rules['size'] = 8
@@ -280,15 +311,13 @@ def get_roster_rules(sport, site, mode):
     return rules
 
 def optimize_lineup(df, config):
-    # FILTER BY SPORT (STRICT)
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
-    
     if pool.empty: return None
 
     if config['slate_games']:
         pool = pool[pool['game_info'].isin(config['slate_games'])].reset_index(drop=True)
-        
+    
     pool = pool[pool['projection'] > 0].reset_index(drop=True)
     if config['bans']: pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
     if pool.empty: return None
@@ -296,9 +325,9 @@ def optimize_lineup(df, config):
     if config['mode'] == 'Showdown':
         flex = pool.copy(); flex['pos_id'] = 'FLEX'
         cpt = pool.copy(); cpt['pos_id'] = 'CPT'
-        cpt['name'] += f" (CPT)"
+        cpt['name'] += " (CPT)"
         cpt['projection'] *= 1.5
-        cpt['salary'] *= 1.5
+        if config['site'] == 'DK': cpt['salary'] *= 1.5
         pool = pd.concat([cpt, flex]).reset_index(drop=True)
     else:
         pool['pos_id'] = pool['position'].replace({'D': 'DST', 'DEF': 'DST'})
@@ -310,7 +339,11 @@ def optimize_lineup(df, config):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
-        prob += pulp.lpSum([pool.loc[p, 'projection'] * x[p] for p in pool.index])
+        sim_col = 'sim' if config['sim'] else 'projection'
+        if config['sim']:
+            pool['sim'] = pool['projection'] * np.random.normal(1.0, 0.15, len(pool))
+
+        prob += pulp.lpSum([pool.loc[p, sim_col] * x[p] for p in pool.index])
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
         prob += pulp.lpSum([x[p] for p in pool.index]) == rules['size']
         
@@ -319,6 +352,10 @@ def optimize_lineup(df, config):
             if not idx.empty:
                 prob += pulp.lpSum([x[p] for p in idx]) >= min_req
                 prob += pulp.lpSum([x[p] for p in idx]) <= max_req
+        
+        for lock in config['locks']:
+            l_idx = pool[pool['name'].str.contains(lock, regex=False)].index
+            if not l_idx.empty: prob += pulp.lpSum([x[p] for p in l_idx]) >= 1
 
         prob.solve(pulp.PULP_CBC_CMD(msg=0))
         
@@ -343,9 +380,8 @@ def get_html_report(df):
 
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 3.0 (Bolt-On Complete)")
+st.sidebar.caption("Hydra Edition 4.0 (Full)")
 
-# API Key handling
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
 
@@ -353,8 +389,7 @@ history = get_bankroll_history(conn)
 current_bank = get_bankroll(conn)
 st.sidebar.metric("🏦 Bankroll", f"${current_bank:,.2f}")
 
-# GLOBAL FILTERS
-sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "CS2"])
+sport = st.sidebar.selectbox("Sport", ["NBA", "NFL", "MLB", "CFB", "NHL", "SOCCER", "PGA", "TENNIS", "CS2"])
 site = st.sidebar.selectbox("Site/Book", ["PrizePicks", "Underdog", "Sleeper", "DraftKings Pick6", "DK", "FD"])
 
 tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4. 🚀 Props", "5. 🧮 Parlay"])
@@ -371,7 +406,7 @@ with tabs[0]:
                     cached_api_fetch(sport, API_KEY)
                     st.success("Sync Complete")
     with col_file:
-        files = st.file_uploader("Upload CSVs (Sleeper/Underdog/RotoWire)", accept_multiple_files=True)
+        files = st.file_uploader("Upload CSVs", accept_multiple_files=True)
         if st.button("🧬 Fuse Files"):
             if files:
                 ref = DataRefinery()
@@ -386,7 +421,11 @@ with tabs[0]:
                 
                 st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
                 st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                st.success(f"Fused {len(new_data)} records successfully.")
+                st.success(f"Fused {len(new_data)} records.")
+    
+    if st.button("🛰️ Run AI Scout"):
+        st.session_state['ai_intel'] = run_web_scout(sport)
+        st.success("AI Intel Gathered")
 
 # --- TAB 2: OPTIMIZER ---
 with tabs[1]:
@@ -394,51 +433,49 @@ with tabs[1]:
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()] if not pool.empty else pd.DataFrame()
     
     if active.empty:
-        st.warning(f"No data for {sport}. Upload CSV or Sync.")
+        st.warning(f"No data for {sport}.")
     else:
-        st.write(f"Pool Size: {len(active)} players")
         games = sorted(active['game_info'].astype(str).unique())
         slate = st.multiselect("🗓️ Filter Slate", games, default=games)
-        
         c1, c2 = st.columns(2)
         mode = c1.radio("Mode", ["Classic", "Showdown"])
         count = c2.slider("Lineups", 1, 50, 10)
+        locks = st.multiselect("Lock", sorted(active['name'].unique()))
         
         if st.button("⚡ Generate Lineups"):
-            cfg = {'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':[], 'bans':[], 'slate_games':slate, 'sim':False}
+            cfg = {'sport':sport, 'site':site, 'mode':mode, 'count':count, 'locks':locks, 'bans':[], 'slate_games':slate, 'sim':False}
             res = optimize_lineup(st.session_state['dfs_pool'], cfg)
             if res is not None:
                 st.dataframe(res)
-            else:
-                st.error("Optimizer found no valid solution.")
+                st.markdown(f'<a href="data:text/html;base64,{get_html_report(res)}" download="report.html">📥 Download Cheat Sheet</a>', unsafe_allow_html=True)
 
-# --- TAB 4: PROPS (FIXED FOR FACTORS & DATES) ---
+# --- TAB 3: SIMULATION (RESTORED) ---
+with tabs[2]:
+    st.markdown("### 🔮 Monte Carlo Simulation")
+    if st.button("🎲 Run Simulation (50 Lineups)"):
+        with st.spinner("Simulating Universe..."):
+            cfg = {'sport':sport, 'site':site, 'mode':"Classic", 'count':50, 'locks':[], 'bans':[], 'stack':True, 'sim':True, 'slate_games':[]}
+            res = optimize_lineup(st.session_state['dfs_pool'], cfg)
+            if res is not None:
+                exp = res['name'].value_counts(normalize=True).mul(100).reset_index()
+                st.plotly_chart(px.bar(exp.head(15), x='proportion', y='name', orientation='h', title="Simulated Exposure"))
+
+# --- TAB 4: PROPS ---
 with tabs[3]:
     st.markdown("### 🚀 Prop Analyzer")
     pool = st.session_state['prop_pool']
+    active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()].copy() if not pool.empty else pd.DataFrame()
     
-    if not pool.empty:
-        # STRICT SPORT FILTER
-        active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()].copy()
-    else:
-        active = pd.DataFrame()
-    
-    if active.empty:
-        st.warning(f"No props found for {sport}.")
+    if active.empty: st.warning(f"No props found for {sport}.")
     else:
         brain = TitanBrain(current_bank)
-        
-        # DETERMINE LINE BASED ON SITE SELECTION
         target_line_col = 'prop_line'
         if site == 'Underdog': target_line_col = 'underdog_line'
         elif site == 'Sleeper': target_line_col = 'sleeper_line'
         elif site == 'PrizePicks': target_line_col = 'prizepicks_line'
         elif site == 'DraftKings Pick6': target_line_col = 'pick6_line'
         
-        # Fallback Logic: If specific line is 0, use generic line
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
-        
-        # Logic
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
         
         res = active.apply(lambda x: brain.calculate_prop_edge(x, 'final_line'), axis=1, result_type='expand')
@@ -446,49 +483,30 @@ with tabs[3]:
         active['rating'] = res[1]
         active['win_prob'] = res[2]
         
-        # Filter valid rows
-        valid_props = active[(active['projection'] > 0) & (active['final_line'] > 0)].copy()
+        valid = active[(active['projection'] > 0) & (active['final_line'] > 0)].copy()
         
-        # Define Columns to Show (including Date, Time, Factors)
-        cols_to_show = [
-            'date', 'time', 'name', 'market', 'team', 'final_line', 'projection', 
-            'pick', 'win_prob', 'rating', 
-            'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj'
-        ]
-        # Only include columns that actually exist in the dataframe
-        final_cols = [c for c in cols_to_show if c in valid_props.columns]
+        cols = ['date', 'time', 'name', 'market', 'team', 'final_line', 'projection', 'pick', 'win_prob', 'rating', 
+                'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
+        final_cols = [c for c in cols if c in valid.columns]
         
-        # Display Table (Sorting by Win Probability)
-        st.dataframe(
-            valid_props[final_cols]
-            .sort_values('win_prob', ascending=False)
-            .style.format({'final_line': '{:.1f}', 'projection': '{:.1f}', 'win_prob': '{:.1f}%'})
-        )
+        st.dataframe(valid[final_cols].sort_values('win_prob', ascending=False).style.format({'final_line':'{:.1f}', 'projection':'{:.1f}', 'win_prob':'{:.1f}%'}))
 
 # --- TAB 5: PARLAY ---
 with tabs[4]:
+    st.markdown("### 🧮 Parlay Architect")
     pool = st.session_state['prop_pool']
     if not pool.empty:
         active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()].copy()
-    else:
-        active = pd.DataFrame()
-
-    if active.empty: st.warning("No props.")
-    else:
-        st.markdown("### 🧮 Parlay Architect")
-        # Ensure final_line exists
         target_line_col = 'prop_line'
         if site == 'Underdog': target_line_col = 'underdog_line'
         elif site == 'Sleeper': target_line_col = 'sleeper_line'
         
         active['final_line'] = active.apply(lambda x: x.get(target_line_col, 0) if x.get(target_line_col, 0) > 0 else x.get('prop_line', 0), axis=1)
         active = active[active['final_line'] > 0]
-        
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
         active['uid'] = active['name'] + " (" + active['market'] + ": " + active['pick'] + ")"
         
         selection = st.multiselect("Build Slip", active['uid'].unique())
-        
         if selection:
             total_prob = 1.0
             for item in selection:
@@ -496,7 +514,4 @@ with tabs[4]:
                 edge = abs(row['projection'] - row['final_line']) / row['final_line']
                 prob = min(0.75, 0.52 + (edge * 0.5))
                 total_prob *= prob
-            
-            c1, c2 = st.columns(2)
-            c1.metric("Legs", len(selection))
-            c2.metric("True Probability", f"{total_prob*100:.1f}%")
+            st.metric("Total Probability", f"{total_prob*100:.1f}%")
