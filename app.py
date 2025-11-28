@@ -53,6 +53,7 @@ class MultiVerseGateway:
 def cached_api_fetch(sport, key): return MultiVerseGateway(key).fetch_data(sport)
 
 def init_db():
+    # FIX: check_same_thread=False prevents threading errors on Cloud
     conn = sqlite3.connect('titan_multiverse.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS bankroll (id INTEGER PRIMARY KEY, date TEXT, amount REAL, notes TEXT)''')
@@ -392,12 +393,13 @@ t1, t2, t3 = st.tabs(["1. Data Fusion", "2. Optimizer", "3. Prop Engine"])
 with t1:
     c1, c2 = st.columns(2)
     with c1:
-        st.success("🏰 DFS Upload (Salaries)")
+        st.success("🏰 DFS Upload (Salary)")
         f1 = st.file_uploader("DFS CSVs", accept_multiple_files=True, key="dfs")
         if f1:
             raw_frames = [pd.read_csv(f) for f in f1]
             st.session_state['dfs_raw'] = raw_frames # Store RAW
-            st.experimental_rerun() # Force reload to process immediately
+            # FIX: Use st.rerun() instead of experimental_rerun()
+            st.rerun() 
             
     with c2:
         st.info("🚀 Prop Upload (Lines)")
@@ -414,7 +416,8 @@ with t1:
         st.session_state['dfs_pool'] = pd.DataFrame()
         st.session_state['prop_pool'] = pd.DataFrame()
         st.session_state['dfs_raw'] = []
-        st.experimental_rerun()
+        # FIX: Use st.rerun() instead of experimental_rerun()
+        st.rerun()
 
     # Show Data Preview
     if not st.session_state['dfs_pool'].empty:
