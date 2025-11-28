@@ -14,7 +14,7 @@ from duckduckgo_search import DDGS
 # ==========================================
 # ⚙️ 1. SYSTEM CONFIGURATION
 # ==========================================
-st.set_page_config(layout="wide", page_title="TITAN OMNI: V17.0", page_icon="🌌")
+st.set_page_config(layout="wide", page_title="TITAN OMNI: V19.0", page_icon="🌌")
 
 st.markdown("""
 <style>
@@ -25,11 +25,10 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
     .value-badge { background-color: #00e676; color: black; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
-    .sharp-badge { background-color: #d500f9; color: white; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size: 0.8em; }
 </style>
 """, unsafe_allow_html=True)
 
-# Session State
+# Session State (SEPARATED POOLS)
 if 'dfs_pool' not in st.session_state: st.session_state['dfs_pool'] = pd.DataFrame()
 if 'prop_pool' not in st.session_state: st.session_state['prop_pool'] = pd.DataFrame()
 if 'api_log' not in st.session_state: st.session_state['api_log'] = []
@@ -242,6 +241,8 @@ class DataRefinery:
                         std[target] = df[s].astype(str).apply(lambda x: x.split('(')[0].strip())
                     elif target == 'position':
                         std[target] = df[s].apply(DataRefinery.normalize_pos)
+                    elif target == 'status':
+                        std[target] = df[s].astype(str).str.strip() # Don't zero out strings
                     else:
                         std[target] = df[s].astype(str).str.strip()
                     break
@@ -255,8 +256,12 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
+        # 🟢 CRITICAL: Fill missing status to avoid accidental filtering
+        if 'status' not in std.columns: std['status'] = 'Active'
+        else: std['status'].fillna('Active', inplace=True)
+        
         defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
-                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'status':'Active', 'rst_own':10.0,
+                   'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD', 'rst_own':10.0,
                    'l3_fpts':0.0, 'avg_fpts':0.0, 'opp_rank':16.0, 'wind':0.0, 'precip':0.0, 'is_home':'No'}
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
@@ -272,6 +277,7 @@ class DataRefinery:
             if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
         std['spike_score'] = std[factors].mean(axis=1).fillna(0)
         
+        # SMART TAGGING
         if source_tag == 'PrizePicks' and std['prizepicks_line'].sum() == 0:
             std['prizepicks_line'] = std['prop_line']
         elif source_tag == 'Underdog' and std['underdog_line'].sum() == 0:
@@ -369,18 +375,21 @@ def optimize_lineup(df, config):
     target_sport = config['sport'].strip().upper()
     pool = df[df['sport'].str.strip().str.upper() == target_sport].copy()
     
+    # 🟢 CRITICAL FIX: Ensure only valid salaries exist for DFS
+    pool = pool[pool['salary'] > 0]
+    
     # 🩹 INJURY FILTER
     if 'status' in pool.columns:
         pool = pool[~pool['status'].str.contains('Out|IR|NA|Doubtful', case=False, na=False)]
     
+    if pool.empty:
+        st.error(f"❌ No valid DFS players found for {target_sport}. Please upload DFS CSV.")
+        return None
+
     pickem_sites = ['PrizePicks', 'Underdog', 'Sleeper', 'DraftKings Pick6']
-    
-    # 🟢 AUTO-FILTER 0 SALARY PLAYERS FOR DFS SITES
-    if config['site'] not in pickem_sites:
-        pool = pool[pool['salary'] > 0]
-        if pool.empty:
-            st.error("⚠️ No players with salary found. Please upload DFS Player Pool.")
-            return None
+    if config['site'] not in pickem_sites and pool['salary'].sum() == 0:
+        st.error("⚠️ No Salary Data found. Cannot run DFS Optimizer.")
+        return None
 
     # APPLY BRAIN BOOSTS
     brain = TitanBrain(0)
@@ -405,6 +414,7 @@ def optimize_lineup(df, config):
     pool = pool[pool['projection'] > 0].reset_index(drop=True)
     if config['bans']: pool = pool[~pool['name'].isin(config['bans'])].reset_index(drop=True)
     
+    # 🟢 SHOWDOWN FIX: Prepare pool BEFORE iterating
     if config['mode'] == 'Showdown':
         flex = pool.copy(); flex['pos_id'] = 'FLEX'
         cpt = pool.copy(); cpt['pos_id'] = 'CPT'
@@ -417,16 +427,19 @@ def optimize_lineup(df, config):
 
     rules = get_roster_rules(config['sport'], config['site'], config['mode'])
     lineups = []
+    
+    # 🟢 RESET EXPOSURE TRACKER FOR NEW POOL
     player_exposure = {i: 0 for i in pool.index}
     
     def solve_lp(relax_stacking=False):
         prob = pulp.LpProblem("Titan", pulp.LpMaximize)
         x = pulp.LpVariable.dicts("p", pool.index, cat='Binary')
         
+        # 🟢 SIMULATION FIX: Allow Negative Noise (Normal Distribution)
         sim_noise = 0.5
         if 'factor_hit_rate' in pool.columns:
             sim_noise = 1.0 - (pool['factor_hit_rate'].fillna(50) / 100.0)
-        randomness = np.random.uniform(0, sim_noise, len(pool))
+        randomness = np.random.normal(0, sim_noise, len(pool)) # Can be negative now
         
         prob += pulp.lpSum([(pool.loc[p, 'projection'] + randomness[p]) * x[p] for p in pool.index])
         prob += pulp.lpSum([pool.loc[p, 'salary'] * x[p] for p in pool.index]) <= rules['cap']
@@ -462,9 +475,7 @@ def optimize_lineup(df, config):
     for i in range(config['count']):
         prob, x = solve_lp(relax_stacking=False)
         
-        # 🟢 AUTO-RETRY IF FAILED
         if prob.status != 1:
-            # st.warning(f"Lineup {i+1} failed with strict rules. Retrying without stacking...")
             prob, x = solve_lp(relax_stacking=True)
         
         if prob.status == 1:
@@ -546,7 +557,7 @@ def get_csv_download(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 17.0 (Bulletproof)")
+st.sidebar.caption("Hydra Edition 19.0 (Perfected)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -562,6 +573,11 @@ tabs = st.tabs(["1. 📡 Fusion", "2. 🏰 Optimizer", "3. 🔮 Simulation", "4.
 # --- TAB 1: DATA ---
 with tabs[0]:
     st.markdown("### 📡 Data Fusion")
+    if st.button("🗑️ Clear All Data"):
+        st.session_state['dfs_pool'] = pd.DataFrame()
+        st.session_state['prop_pool'] = pd.DataFrame()
+        st.success("Pools Cleared.")
+
     col_api, col_file = st.columns(2)
     with col_api:
         if st.button("☁️ AUTO-SYNC APIS"):
@@ -586,9 +602,15 @@ with tabs[0]:
                         new_data = ref.merge(new_data, ref.ingest(raw, sport, source_tag))
                     except Exception as e: st.error(f"Error {f.name}: {e}")
                 
-                st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
-                st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                st.success(f"Fused {len(new_data)} records. Tagged as {source_tag}.")
+                # SEPARATE POOLS LOGIC
+                if source_tag == "Generic/Combined":
+                    # Assume DFS if generic
+                    st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
+                else:
+                    # Assume Prop if specific
+                    st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
+                
+                st.success(f"Fused {len(new_data)} records into pool.")
     
     if st.button("🛰️ Run AI Scout"):
         st.session_state['ai_intel'] = run_web_scout(sport)
@@ -601,7 +623,7 @@ with tabs[1]:
     active = pool[pool['sport'].str.strip().str.upper() == sport.strip().upper()] if not pool.empty else pd.DataFrame()
     
     if active.empty:
-        st.warning(f"No data for {sport}. Please Upload CSV.")
+        st.warning(f"No DFS data for {sport}. Upload CSV.")
     else:
         if 'value_score' in active.columns:
             top_value = active.sort_values('value_score', ascending=False).head(6)
@@ -642,10 +664,6 @@ with tabs[1]:
                 feedback = brain.analyze_lineup(top_lu, sport, slate_size)
                 st.info(f"💡 **Lineup 1 Analysis:** {feedback}")
                 
-                # Show Brain Notes
-                if 'notes' in res.columns:
-                    st.caption("🧠 **Brain Notes:** " + ", ".join(res['notes'].dropna().unique()))
-                
                 csv_data = get_csv_download(res)
                 st.download_button("📥 Export CSV", data=csv_data, file_name="titan_lineups.csv", mime="text/csv")
             else:
@@ -680,7 +698,6 @@ with tabs[3]:
         st.info(f"🔎 Analyzing for **{site}**. Using column: `{target_line_col}`.")
         
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
-        # Apply Brain to get Smart Proj
         active[['smart_projection', 'notes']] = active.apply(lambda row: pd.Series(brain.apply_strategic_boosts(row, sport)), axis=1)
         active['pick'] = np.where(active['smart_projection'] > active['final_line'], "OVER", "UNDER")
         
