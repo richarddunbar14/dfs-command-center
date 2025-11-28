@@ -24,7 +24,6 @@ st.markdown("""
     div[data-testid="stDataFrame"] { border: 1px solid #333; border-radius: 5px; }
     .stButton>button { width: 100%; border-radius: 4px; font-weight: 800; text-transform: uppercase; background: linear-gradient(90deg, #111 0%, #222 100%); color: #29b6f6; border: 1px solid #29b6f6; transition: 0.3s; }
     .stButton>button:hover { background: #29b6f6; color: #000; box-shadow: 0 0 15px #29b6f6; }
-    .metric-card { background-color: #1e1e1e; padding: 10px; border-radius: 5px; text-align: center; border: 1px solid #333; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -156,7 +155,7 @@ class TitanBrain:
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (STRICT ROUTING)
+# 📂 5. DATA REFINERY (STRICT ROUTING V7.1)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -185,14 +184,13 @@ class DataRefinery:
         df.columns = df.columns.astype(str).str.upper().str.strip()
         std = pd.DataFrame()
         
-        # 🟢 STRICT MAPPINGS
+        # 🟢 STRICT MAPPINGS (No 'O/U' to avoid Game Totals)
         maps = {
             'name': ['PLAYER', 'NAME', 'WHO', 'ATHLETE'],
             'projection': ['ROTOWIRE PROJECTION', 'PROJECTION', 'FPTS', 'PROJ', 'AVG FPTS', 'PTS'], 
             'salary': ['SAL', 'SALARY', 'CAP', 'COST', 'PRICE'],
             'position': ['POS', 'POSITION', 'ROSTER POSITION', 'SLOT'],
             'team': ['TEAM', 'TM', 'SQUAD'],
-            # 🛑 CRITICAL FIX: Removed 'O/U' to prevent Game Totals from being read as Props
             'prop_line': ['LINE', 'PROP', 'PLAYER PROP', 'STRIKE', 'TOTAL'], 
             'market': ['MARKET NAME', 'MARKET', 'STAT'],
             'game_info': ['GAME INFO', 'GAME', 'MATCHUP', 'OPPONENT'],
@@ -235,19 +233,14 @@ class DataRefinery:
 
         if 'name' not in std.columns: return pd.DataFrame()
         
-        # Defaults
         defaults = {'projection':0.0, 'salary':0.0, 'prop_line':0.0, 'position':'FLEX', 'team':'N/A', 
                    'market':'Standard', 'game_info':'All Games', 'date':datetime.now().strftime("%Y-%m-%d"), 'time':'TBD'}
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
         
-        # 🟢 ROBUST SPORT ROUTING
-        if 'SPORT' in df.columns: 
-            std['sport'] = df['SPORT'].str.strip().str.upper()
-        else: 
-            std['sport'] = sport_tag.upper()
+        if 'SPORT' in df.columns: std['sport'] = df['SPORT'].str.strip().str.upper()
+        else: std['sport'] = sport_tag.upper()
         
-        # Spike Score Calculation
         factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
         for f in factors:
             if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
@@ -260,17 +253,14 @@ class DataRefinery:
         if base.empty: return new_df
         if new_df.empty: return base
         
-        # 🟢 SMART FUSION LOGIC (Prevents Data Loss)
+        # 🟢 SMART FUSION: Combine MAX values to prevent data loss
         combined = pd.concat([base, new_df])
         
-        # Columns to keep MAX value (so valid lines overwrite 0.0)
         numeric_cols = [
             'projection', 'salary', 'prop_line', 
             'prizepicks_line', 'underdog_line', 'sleeper_line', 'pick6_line',
             'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj', 'spike_score'
         ]
-        
-        # Columns to keep LAST value (Metadata)
         meta_cols = ['position', 'team', 'game_info', 'date', 'time']
         
         agg_dict = {col: 'max' for col in numeric_cols if col in combined.columns}
@@ -278,7 +268,6 @@ class DataRefinery:
             if col in combined.columns: agg_dict[col] = 'last'
             
         try:
-            # Group by unique identifier (Player + Sport + Market)
             fused = combined.groupby(['name', 'sport', 'market'], as_index=False).agg(agg_dict)
             return fused
         except:
