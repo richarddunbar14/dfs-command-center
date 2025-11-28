@@ -98,7 +98,7 @@ def update_bankroll(conn, amount, note):
     conn.commit()
 
 # ==========================================
-# 🧠 4. TITAN BRAIN (ENHANCED FOR ANALYSIS)
+# 🧠 4. TITAN BRAIN (ANALYSIS ENGINE)
 # ==========================================
 class TitanBrain:
     def __init__(self, bankroll):
@@ -127,35 +127,36 @@ class TitanBrain:
         reasoning = []
         if edge_raw > 0.10: reasoning.append(f"🟢 High Edge ({edge_raw*100:.1f}%)")
         if row.get('factor_hit_rate', 0) > 55: reasoning.append(f"🔥 Hot Trend ({row['factor_hit_rate']}%)")
-        if row.get('factor_proj', 0) > 80: reasoning.append(f"📈 Strong Proj Factor")
+        if row.get('spike_score', 0) > 75: reasoning.append(f"⚡ High Spike Score")
         
         logic_text = " + ".join(reasoning) if reasoning else "Neutral Value"
         
         return units, rating, win_prob * 100, logic_text
 
     def analyze_lineup(self, lineup_df, sport):
-        # Correlation & Construction Feedback
         msg = []
         stacks = lineup_df['team'].value_counts()
         heavy_stack = stacks[stacks >= 2].index.tolist()
         
         if heavy_stack:
-            msg.append(f"🔗 **Correlation Detected:** Stacks found for {', '.join(heavy_stack)}. Good for GPP/Tournaments.")
+            msg.append(f"🔗 **Correlation Detected:** Stacking {', '.join(heavy_stack)}. Good for GPP upside.")
         else:
-            msg.append(f"🧩 **Scatter Build:** No major stacks. Better for Cash games or low-correlation sports.")
+            msg.append(f"🧩 **Scatter Build:** No major stacks found. Offers floor safety.")
             
         avg_proj = lineup_df['projection'].mean()
-        msg.append(f"📊 **Avg Projection:** {avg_proj:.1f} pts per player.")
+        msg.append(f"📊 **Avg Proj:** {avg_proj:.1f} pts.")
         
-        # Spike Analysis
         if 'spike_score' in lineup_df.columns:
             avg_spike = lineup_df['spike_score'].mean()
-            if avg_spike > 70: msg.append(f"🔥 **High Spike Potential:** Roster has high 'Factor' scores ({avg_spike:.1f}), indicating boom/bust potential.")
+            if avg_spike > 70: 
+                msg.append(f"🔥 **Volatile/High Upside:** High average Spike Score ({avg_spike:.1f}). Tournament ready.")
+            else:
+                msg.append(f"🛡️ **Safe/Floor:** Moderate Spike Score ({avg_spike:.1f}). Cash game viable.")
         
         return " | ".join(msg)
 
 # ==========================================
-# 📂 5. DATA REFINERY (SPIKE DETECTION)
+# 📂 5. DATA REFINERY (SMART FUSION)
 # ==========================================
 class DataRefinery:
     @staticmethod
@@ -237,13 +238,17 @@ class DataRefinery:
         for k,v in defaults.items():
             if k not in std.columns: std[k] = v
         
-        if 'SPORT' in df.columns: std['sport'] = df['SPORT'].str.strip().str.upper()
-        else: std['sport'] = sport_tag.upper()
+        # Robust Sport Tagging
+        if 'SPORT' in df.columns: 
+            std['sport'] = df['SPORT'].str.strip().str.upper()
+        else: 
+            std['sport'] = sport_tag.upper()
         
-        # --- CALCULATE SPIKE SCORE (THE "HOT" METER) ---
-        # We average the available factors to create a 0-100 score
+        # Spike Score Calculation
         factors = ['factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj']
-        std['spike_score'] = std[factors].max(axis=1) # Take the highest factor as the spike potential
+        for f in factors:
+            if f in std.columns: std[f] = pd.to_numeric(std[f], errors='coerce')
+        std['spike_score'] = std[factors].mean(axis=1).fillna(0)
             
         return std
 
@@ -251,7 +256,37 @@ class DataRefinery:
     def merge(base, new_df):
         if base.empty: return new_df
         if new_df.empty: return base
-        return pd.concat([base, new_df]).drop_duplicates(subset=['name', 'sport', 'market'], keep='last').reset_index(drop=True)
+        
+        # SMART FUSION: Combine instead of Overwrite
+        # 1. Concatenate all data
+        combined = pd.concat([base, new_df])
+        
+        # 2. Define columns to "Max" (keep highest value found in any file)
+        # This ensures if File A has PrizePicks=25 and File B has PrizePicks=0, we keep 25.
+        numeric_cols = [
+            'projection', 'salary', 'prop_line', 
+            'prizepicks_line', 'underdog_line', 'sleeper_line', 'pick6_line',
+            'factor_pickem', 'factor_sportsbook', 'factor_hit_rate', 'factor_proj', 'spike_score'
+        ]
+        
+        # 3. Define columns to "Last" (Static info like Team, Position)
+        meta_cols = ['position', 'team', 'game_info', 'date', 'time']
+        
+        # 4. Group by Unique Player+Sport+Market
+        # We assume 'name', 'sport', 'market' is the unique key
+        
+        # Create dictionary for aggregation
+        agg_dict = {col: 'max' for col in numeric_cols if col in combined.columns}
+        for col in meta_cols:
+            if col in combined.columns: agg_dict[col] = 'last'
+            
+        # Perform the "Smart Groupby"
+        try:
+            fused = combined.groupby(['name', 'sport', 'market'], as_index=False).agg(agg_dict)
+            return fused
+        except:
+            # Fallback if aggregation fails
+            return combined.drop_duplicates(subset=['name', 'sport', 'market'], keep='last')
 
 # ==========================================
 # 📡 6. AI SCOUT
@@ -380,7 +415,7 @@ def get_html_report(df):
 # ==========================================
 conn = init_db()
 st.sidebar.title("TITAN OMNI")
-st.sidebar.caption("Hydra Edition 6.0 (Analysis & Spikes)")
+st.sidebar.caption("Hydra Edition 7.0 (Smart Fusion)")
 
 try: API_KEY = st.secrets["rapid_api_key"]
 except: API_KEY = st.sidebar.text_input("Enter RapidAPI Key", type="password")
@@ -420,13 +455,13 @@ with tabs[0]:
                 
                 st.session_state['dfs_pool'] = ref.merge(st.session_state['dfs_pool'], new_data)
                 st.session_state['prop_pool'] = ref.merge(st.session_state['prop_pool'], new_data)
-                st.success(f"Fused {len(new_data)} records.")
+                st.success(f"Fused {len(new_data)} records using Smart Aggregation.")
     
     if st.button("🛰️ Run AI Scout"):
         st.session_state['ai_intel'] = run_web_scout(sport)
         st.success("AI Intel Gathered")
 
-# --- TAB 2: OPTIMIZER (IMPROVED) ---
+# --- TAB 2: OPTIMIZER ---
 with tabs[1]:
     st.markdown("### 🏰 Lineup Generator")
     pool = st.session_state['dfs_pool']
@@ -435,14 +470,12 @@ with tabs[1]:
     if active.empty:
         st.warning(f"No data for {sport}. Please Upload CSV with Salaries.")
     else:
-        # Check Salaries
         if active['salary'].sum() == 0:
             st.warning("⚠️ Loaded data has no Salaries. Cannot run Optimizer.")
         
         games = sorted(active['game_info'].astype(str).unique())
         slate = st.multiselect("🗓️ Filter Slate", games, default=games)
         
-        # Position Filter
         all_pos = sorted(active['position'].unique())
         pos_filter = st.multiselect("🛡️ Filter Positions (Optional)", all_pos)
         
@@ -457,12 +490,10 @@ with tabs[1]:
             
             if res is not None:
                 st.dataframe(res)
-                # Show Analysis for Top Lineup
                 top_lu = res[res['Lineup_ID']==1]
                 brain = TitanBrain(current_bank)
                 feedback = brain.analyze_lineup(top_lu, sport)
                 st.info(f"💡 **Titan Analysis (Lineup 1):** {feedback}")
-                
                 st.markdown(f'<a href="data:text/html;base64,{get_html_report(res)}" download="report.html">📥 Download Cheat Sheet</a>', unsafe_allow_html=True)
             else:
                 st.error("Optimization Failed.")
@@ -478,7 +509,7 @@ with tabs[2]:
                 exp = res['name'].value_counts(normalize=True).mul(100).reset_index()
                 st.plotly_chart(px.bar(exp.head(15), x='proportion', y='name', orientation='h', title="Simulated Exposure"))
 
-# --- TAB 4: PROPS (ENHANCED) ---
+# --- TAB 4: PROPS ---
 with tabs[3]:
     st.markdown("### 🚀 Prop Analyzer (With Logic)")
     pool = st.session_state['prop_pool']
@@ -496,7 +527,6 @@ with tabs[3]:
         active['final_line'] = active.apply(lambda x: x[target_line_col] if x.get(target_line_col, 0) > 0 else x['prop_line'], axis=1)
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
         
-        # Apply Enhanced Logic
         res = active.apply(lambda x: brain.calculate_prop_edge(x, 'final_line'), axis=1, result_type='expand')
         active['units'] = res[0]
         active['rating'] = res[1]
@@ -505,7 +535,6 @@ with tabs[3]:
         
         valid = active[(active['projection'] > 0) & (active['final_line'] > 0)].copy()
         
-        # SPIKE FILTER
         show_spikes = st.checkbox("🔥 Show Only 'Spiked' Players (High Factor Score)")
         if show_spikes:
             valid = valid[valid['spike_score'] > 75]
@@ -520,7 +549,7 @@ with tabs[3]:
             .style.format({'final_line':'{:.1f}', 'projection':'{:.1f}', 'win_prob':'{:.1f}%', 'spike_score':'{:.0f}'})
         )
 
-# --- TAB 5: PARLAY (CORRELATION) ---
+# --- TAB 5: PARLAY ---
 with tabs[4]:
     st.markdown("### 🧮 Parlay & Correlation Architect")
     pool = st.session_state['prop_pool']
@@ -535,7 +564,6 @@ with tabs[4]:
         active['pick'] = np.where(active['projection'] > active['final_line'], "OVER", "UNDER")
         active['uid'] = active['name'] + " (" + active['market'] + ": " + active['pick'] + ")"
         
-        # CORRELATION STATION
         st.subheader("🔗 Correlation Station")
         teams = active['team'].unique()
         selected_team = st.selectbox("Find Correlated Pairs for Team:", teams)
