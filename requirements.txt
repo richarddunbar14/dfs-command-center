@@ -4,5 +4,7 @@ numpy
 pulp
 plotly
 duckduckgo-search
-requests
 openpyxl
+xlsxwriter
+scipy
+requests
